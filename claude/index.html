@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Adaptive Maze TD — Pressure Prototype</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #c9d1d9;
+        --muted: #8b949e;
+        --accent: #58a6ff;
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      #app {
+        display: flex;
+        gap: 16px;
+        padding: 16px;
+        align-items: flex-start;
+      }
+      canvas {
+        background: #05070a;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: crosshair;
+        image-rendering: pixelated;
+      }
+      #panel {
+        width: 280px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px 14px;
+      }
+      #panel h1 { font-size: 14px; margin: 0 0 4px; color: var(--accent); }
+      #panel h2 {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 16px 0 6px;
+        border-top: 1px solid var(--border);
+        padding-top: 10px;
+      }
+      .row { display: flex; align-items: center; gap: 8px; margin: 5px 0; }
+      .row label { flex: 1 1 auto; color: var(--muted); }
+      .row input[type="range"] { flex: 0 0 96px; }
+      .row .val { flex: 0 0 42px; text-align: right; color: var(--text); }
+      .hint { color: var(--muted); margin: 2px 0 0; }
+      #stats { white-space: pre; color: var(--text); }
+      .toggle-row { display: flex; gap: 12px; flex-wrap: wrap; margin: 6px 0; }
+      .toggle-row label { color: var(--muted); display: flex; align-items: center; gap: 4px; }
+      button {
+        background: #21262d; color: var(--text); border: 1px solid var(--border);
+        border-radius: 5px; padding: 5px 10px; cursor: pointer; font: inherit;
+      }
+      button:hover { border-color: var(--accent); }
+      #towers { display: flex; flex-direction: column; gap: 5px; margin-bottom: 6px; }
+      .tower-btn { text-align: left; }
+      .tower-btn b { color: var(--accent); margin-right: 4px; }
+      .muted { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game"></canvas>
+      <div id="panel"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
