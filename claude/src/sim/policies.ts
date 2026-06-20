@@ -18,38 +18,45 @@ export interface PlacedTower {
   kind: TowerKind;
 }
 
-// A vertical wall of towers at column x, leaving the given gap rows open.
-function wall(x: number, gapRows: number[], kind: TowerKind): PlacedTower[] {
+// A wall segment from yFrom to yTo (inclusive), emitted in that order so the
+// incremental builder can anchor to a map edge first and stay functional.
+function seg(x: number, yFrom: number, yTo: number, kind: TowerKind): PlacedTower[] {
   const out: PlacedTower[] = [];
-  for (let y = 0; y < ROWS; y++) if (!gapRows.includes(y)) out.push({ x, y, kind });
+  const step = yFrom <= yTo ? 1 : -1;
+  for (let y = yFrom; y !== yTo + step; y += step) {
+    if (y >= 0 && y < ROWS) out.push({ x, y, kind });
+  }
   return out;
 }
 
-// Fixed layouts to evaluate. Each lists its killer guns FIRST so the incremental
-// builder spends early money on damage, then fills the maze walls.
+// Fixed layouts to evaluate. Walls are EDGE-ANCHORED so a partial build still
+// forces a real detour (a mid-map wall does nothing until fully spanning).
 export const LAYOUTS: Record<string, PlacedTower[]> = {
-  // One tight chokepoint mid-map.
+  // Edge-anchored serpentine: lane coverage FIRST, then extend each wall to its
+  // edge so a partial build still funnels.
+  serpentine: [
+    { x: 4, y: 9, kind: 'cannon' }, { x: 7, y: 9, kind: 'gun' }, { x: 7, y: 8, kind: 'gun' }, { x: 7, y: 10, kind: 'gun' },
+    ...seg(7, 7, 0, 'gun'), { x: 7, y: 11, kind: 'gun' }, // top wall to edge
+    { x: 10, y: 13, kind: 'frost' }, { x: 13, y: 9, kind: 'gun' },
+    ...seg(13, 17, 6, 'gun'), // bottom wall to edge
+    { x: 16, y: 5, kind: 'cannon' }, { x: 19, y: 9, kind: 'gun' },
+    ...seg(19, 11, 0, 'gun'), { x: 22, y: 9, kind: 'gun' }, // top wall to edge
+  ],
+  // One tight chokepoint: a full wall at x=13 with a single gap, built outward
+  // from the lane, with a dedicated killbox around the gap.
   choke: [
     { x: 12, y: 8, kind: 'gun' }, { x: 12, y: 10, kind: 'gun' },
     { x: 14, y: 8, kind: 'gun' }, { x: 14, y: 10, kind: 'gun' },
     { x: 11, y: 9, kind: 'frost' }, { x: 15, y: 9, kind: 'cannon' },
-    ...wall(13, [9], 'gun'),
-  ],
-  // Two offset walls -> a serpentine lane (more exposure time).
-  doubleWall: [
-    { x: 8, y: 4, kind: 'gun' }, { x: 8, y: 6, kind: 'gun' },
-    { x: 17, y: 12, kind: 'gun' }, { x: 17, y: 14, kind: 'gun' },
-    { x: 12, y: 9, kind: 'cannon' }, { x: 12, y: 8, kind: 'frost' },
-    ...wall(9, [5], 'gun'),
-    ...wall(16, [13], 'gun'),
+    ...seg(13, 8, 0, 'gun'), ...seg(13, 10, 17, 'gun'),
   ],
   // The user's strategy: box the spawn at the buffer edge with two close walls.
   spawnBox: [
     { x: 4, y: 8, kind: 'gun' }, { x: 4, y: 10, kind: 'gun' },
     { x: 6, y: 8, kind: 'gun' }, { x: 6, y: 10, kind: 'gun' },
     { x: 5, y: 9, kind: 'cannon' },
-    ...wall(3, [7], 'gun'),
-    ...wall(5, [11], 'gun'),
+    ...seg(3, 7, 0, 'gun'), ...seg(3, 11, 17, 'gun'),
+    ...seg(5, 11, 17, 'gun'), ...seg(5, 7, 0, 'gun'),
   ],
 };
 

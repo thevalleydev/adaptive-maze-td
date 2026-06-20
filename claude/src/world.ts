@@ -16,7 +16,7 @@ export class World {
   towers: Tower[] = [];
   shots: Shot[] = [];
 
-  money = 250;
+  money = 300;
   kills = 0;
   leaks = 0;
 
@@ -112,7 +112,7 @@ export class World {
     this.enemies = [];
     this.towers = [];
     this.shots = [];
-    this.money = 250;
+    this.money = 300;
     this.kills = 0;
     this.leaks = 0;
     this.wave = 0;

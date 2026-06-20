@@ -61,16 +61,16 @@ export const config: Config = {
   pressureRate: 9,
   decayRate: 1.5,
   crackThreshold: 30,
-  collapseThreshold: 80,
+  collapseThreshold: 55,
   telegraphDuration: 2.5,
   pressureAvoidance: 3,
 
   pressurePerDamage: 0.1,
-  pressurePerKill: 6,
+  pressurePerKill: 12,
 
   pressureTowerDebuff: 0.55,
 
-  betweenWaveDecay: 0.5,
+  betweenWaveDecay: 0.35,
   crackHealMargin: 10,
 
   crackedCost: 1.5,
@@ -83,12 +83,12 @@ export const config: Config = {
   spawnInterval: 0.7,
   interWaveTime: 5,
   waveBaseCount: 8,
-  waveCountGrowth: 2,
-  waveHpGrowth: 0.25,
+  waveCountGrowth: 1,
+  waveHpGrowth: 0.18,
   targetWave: 12,
 
   enemySpeed: 2.4,
-  enemyHp: 60,
+  enemyHp: 50,
 
   spawnBuffer: 2,
   killRewardMult: 1,
