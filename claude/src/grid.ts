@@ -9,11 +9,17 @@ export type TileState = 'normal' | 'cracked' | 'collapsing' | 'collapsed';
 export interface Tile {
   x: number;
   y: number;
-  blocked: boolean; // true = wall or tower; never traversable
+  blocked: boolean; // true = tower occupies it; never traversable (cleared on sell)
+  rock: boolean; // natural obstacle from map generation; permanent, can't build on
   state: TileState;
   pressure: number;
   collapseTimer: number; // counts down while state === 'collapsing'
   rubbleAge: number; // seconds spent collapsed; heals back to normal at rubbleHealTime
+}
+
+// A tile is impassable if a tower blocks it or it's natural rock.
+export function isWall(t: Tile): boolean {
+  return t.blocked || t.rock;
 }
 
 export class Grid {
@@ -32,7 +38,7 @@ export class Grid {
   constructor() {
     for (let y = 0; y < ROWS; y++) {
       for (let x = 0; x < COLS; x++) {
-        this.tiles.push({ x, y, blocked: false, state: 'normal', pressure: 0, collapseTimer: 0, rubbleAge: 0 });
+        this.tiles.push({ x, y, blocked: false, rock: false, state: 'normal', pressure: 0, collapseTimer: 0, rubbleAge: 0 });
       }
     }
   }

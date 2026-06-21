@@ -6,10 +6,13 @@ import { World } from './world';
 // Thin presentation layer: owns a World (all simulation lives there), draws it,
 // and forwards mouse/keyboard input. No game logic here — see world.ts.
 export class Game {
-  world = new World();
+  world: World;
   selectedKind: TowerKind = 'gun';
   hover: Pt | null = null;
   fps = 0;
+  onSeedChange?: (seed: number | null) => void;
+  learnBanner = '';
+  learnTimer = 0;
 
   ctx: CanvasRenderingContext2D;
 
@@ -39,11 +42,40 @@ export class Game {
     return this.world.towers;
   }
 
-  reset() {
-    this.world.reset();
+  get seed() {
+    return this.world.seed;
+  }
+  get started() {
+    return this.world.started;
+  }
+  get awaitingLevelUp() {
+    return this.world.awaitingLevelUp;
+  }
+  get levelUpOptions() {
+    return this.world.levelUpOptions;
+  }
+  get evolution() {
+    return this.world.evolution;
   }
 
-  constructor(canvas: HTMLCanvasElement) {
+  start() {
+    this.world.start();
+  }
+  chooseLevelUp(i: number) {
+    this.world.chooseLevelUp(i);
+  }
+
+  reset() {
+    this.world.reset(); // replay the same seed
+  }
+
+  newRun(seed: number) {
+    this.world.loadSeed(seed);
+    this.onSeedChange?.(seed);
+  }
+
+  constructor(canvas: HTMLCanvasElement, seed: number | null = null) {
+    this.world = new World(seed);
     canvas.width = COLS * TILE;
     canvas.height = ROWS * TILE;
     this.ctx = canvas.getContext('2d')!;
@@ -61,8 +93,11 @@ export class Game {
       const r = canvas.getBoundingClientRect();
       const x = Math.floor((e.clientX - r.left) / TILE);
       const y = Math.floor((e.clientY - r.top) / TILE);
-      if (e.button === 0) this.world.tryPlaceTower(x, y, this.selectedKind);
-      else if (e.button === 2) this.world.trySellTower(x, y);
+      if (e.button === 0) {
+        // Click your own tower to upgrade it; an empty tile to build.
+        if (this.world.towers.some((t) => t.x === x && t.y === y)) this.world.tryUpgradeTower(x, y);
+        else this.world.tryPlaceTower(x, y, this.selectedKind);
+      } else if (e.button === 2) this.world.trySellTower(x, y);
     });
     window.addEventListener('keydown', (e) => {
       const t = TOWER_ORDER.find((k) => TOWER_DEFS[k].hotkey === e.key);
@@ -73,6 +108,11 @@ export class Game {
   update(dt: number) {
     if (view.paused) return;
     this.world.update(dt);
+    if (this.world.justLearned) {
+      this.learnBanner = this.world.justLearned === 'climb' ? 'THE SWARM LEARNED TO CLIMB' : 'THE SWARM LEARNED TO BOMB';
+      this.learnTimer = 3.5;
+    }
+    if (this.learnTimer > 0) this.learnTimer -= dt;
   }
 
   render() {
@@ -89,6 +129,15 @@ export class Game {
       if ((t.x + t.y) % 2 === 0) base = '#111923';
       ctx.fillStyle = base;
       ctx.fillRect(px, py, TILE, TILE);
+
+      if (t.rock) {
+        // Natural obstacle — impassable, can't build on. Build the maze around it.
+        ctx.fillStyle = '#3a3f47';
+        ctx.fillRect(px + 2, py + 2, TILE - 4, TILE - 4);
+        ctx.fillStyle = '#4b515a';
+        ctx.fillRect(px + 6, py + 5, TILE - 14, TILE - 13);
+        continue;
+      }
 
       if (view.showHeatmap && t.pressure > 0 && t.state !== 'collapsed') {
         const frac = Math.min(1, t.pressure / config.collapseThreshold);
@@ -158,18 +207,42 @@ export class Game {
       const cx = t.x * TILE + TILE / 2;
       const cy = t.y * TILE + TILE / 2;
       const def = TOWER_DEFS[t.kind];
-      ctx.fillStyle = def.color;
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.beginPath();
-      ctx.arc(cx, cy, TILE * 0.34, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      const frac = Math.min(1, world.maxNeighborPressure(t.x, t.y) / config.collapseThreshold);
-      if (frac > 0.05) {
-        ctx.fillStyle = `rgba(255,40,30,${0.5 * frac})`;
+      if (def.structural) {
+        // Wall: a solid block (no weapon).
+        ctx.fillStyle = def.color;
+        ctx.fillRect(t.x * TILE + 2, t.y * TILE + 2, TILE - 4, TILE - 4);
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.strokeRect(t.x * TILE + 2.5, t.y * TILE + 2.5, TILE - 5, TILE - 5);
+      } else {
+        ctx.fillStyle = def.color;
+        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
         ctx.beginPath();
         ctx.arc(cx, cy, TILE * 0.34, 0, Math.PI * 2);
         ctx.fill();
+        ctx.stroke();
+        if (def.ventRate) {
+          // Square coverage ring — matches exactly the tiles it vents.
+          const ext = Math.max(1, Math.round(def.ventRadius ?? def.range));
+          ctx.strokeStyle = 'rgba(126,224,192,0.4)';
+          ctx.strokeRect((t.x - ext) * TILE + 1, (t.y - ext) * TILE + 1, (2 * ext + 1) * TILE - 2, (2 * ext + 1) * TILE - 2);
+        } else {
+          const frac = Math.min(1, world.maxNeighborPressure(t.x, t.y) / config.collapseThreshold);
+          if (frac > 0.05) {
+            ctx.fillStyle = `rgba(255,40,30,${0.5 * frac})`;
+            ctx.beginPath();
+            ctx.arc(cx, cy, TILE * 0.34, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+      // Upgrade-level pips.
+      if (t.level > 1) {
+        ctx.fillStyle = '#ffffff';
+        for (let i = 0; i < t.level - 1; i++) {
+          ctx.beginPath();
+          ctx.arc(cx - 5 + i * 5, cy + TILE * 0.32, 1.8, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       if (view.collapseWrecksTowers && world.neighborCollapsing(t.x, t.y)) {
         const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 80);
@@ -192,13 +265,39 @@ export class Game {
       const cx = e.x * TILE + TILE / 2;
       const cy = e.y * TILE + TILE / 2;
       const def = ENEMY_DEFS[e.kind];
+      // Bombing target tile telegraph (drawn under the enemy).
+      if (e.bombing && e.bombTarget) {
+        const tx = e.bombTarget.x * TILE;
+        const ty = e.bombTarget.y * TILE;
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 70);
+        ctx.fillStyle = `rgba(255,120,40,${0.25 + 0.45 * pulse})`;
+        ctx.fillRect(tx, ty, TILE, TILE);
+      }
       ctx.fillStyle = def.color;
       ctx.beginPath();
       ctx.arc(cx, cy, TILE * def.radius, 0, Math.PI * 2);
       ctx.fill();
-      if (e.slowFactor < 1) {
+      if (e.climbing) {
+        // Scaling a wall — dashed light outline.
+        ctx.strokeStyle = 'rgba(220,220,230,0.95)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1;
+      } else if (e.slowFactor < 1) {
         ctx.strokeStyle = '#3fd6ff';
         ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      if (e.bombing) {
+        // Fuse arc filling toward detonation.
+        const p = Math.min(1, e.bombTimer / config.bombTime);
+        ctx.strokeStyle = 'rgba(255,140,40,0.95)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(cx, cy, TILE * 0.4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
       }
@@ -226,22 +325,60 @@ export class Game {
     }
     ctx.lineWidth = 1;
 
-    // --- Hover / build preview ---
+    // --- Hover / build-or-upgrade preview ---
     if (this.hover && world.grid.inBounds(this.hover.x, this.hover.y)) {
-      const px = this.hover.x * TILE;
-      const py = this.hover.y * TILE;
-      const def = TOWER_DEFS[this.selectedKind];
-      const ok = world.canBuildOn(this.hover.x, this.hover.y) && this.money >= world.towerCost(this.selectedKind);
-      ctx.strokeStyle = ok ? 'rgba(63,185,80,0.9)' : 'rgba(248,81,73,0.9)';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
-      ctx.strokeStyle = ok ? def.color : 'rgba(248,81,73,0.3)';
-      ctx.globalAlpha = 0.6;
-      ctx.beginPath();
-      ctx.arc(px + TILE / 2, py + TILE / 2, def.range * TILE, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = 1;
+      const hx = this.hover.x;
+      const hy = this.hover.y;
+      const px = hx * TILE;
+      const py = hy * TILE;
+      const existing = world.towers.find((t) => t.x === hx && t.y === hy);
+
+      if (existing) {
+        const sdef = TOWER_DEFS[existing.kind];
+        if (sdef.structural) {
+          // Wall: selectable for sell only (no upgrade).
+          ctx.strokeStyle = 'rgba(150,150,150,0.7)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+          ctx.lineWidth = 1;
+        } else {
+          // Upgrade preview: current range + cost/MAX label.
+          const up = world.upgradeCostAt(hx, hy);
+          const ok = up !== null && this.money >= up;
+          ctx.strokeStyle = up === null ? 'rgba(150,150,150,0.7)' : ok ? 'rgba(63,185,80,0.9)' : 'rgba(248,81,73,0.9)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+          ctx.strokeStyle = `${sdef.color}99`;
+          ctx.beginPath();
+          ctx.arc(px + TILE / 2, py + TILE / 2, existing.rangeEff * TILE, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.lineWidth = 1;
+          ctx.fillStyle = up === null ? '#8b949e' : ok ? '#3fb950' : '#f85149';
+          ctx.font = `bold 12px monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(up === null ? 'MAX' : `↑ $${up}`, px + TILE / 2, py - 1);
+        }
+      } else {
+        const def = TOWER_DEFS[this.selectedKind];
+        const ok = world.canBuildOn(hx, hy) && this.money >= world.towerCost(this.selectedKind);
+        ctx.strokeStyle = ok ? 'rgba(63,185,80,0.9)' : 'rgba(248,81,73,0.9)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(px + 1, py + 1, TILE - 2, TILE - 2);
+        // Coverage preview: square for Vent, circle for attackers, none for walls.
+        ctx.strokeStyle = ok ? def.color : 'rgba(248,81,73,0.3)';
+        ctx.globalAlpha = 0.6;
+        if (def.ventRate) {
+          const ext = Math.max(1, Math.round(def.ventRadius ?? def.range));
+          ctx.strokeRect((hx - ext) * TILE, (hy - ext) * TILE, (2 * ext + 1) * TILE, (2 * ext + 1) * TILE);
+        } else if (def.range > 0) {
+          ctx.beginPath();
+          ctx.arc(px + TILE / 2, py + TILE / 2, def.range * TILE, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1;
+      }
     }
 
     this.renderHud();
@@ -257,11 +394,17 @@ export class Game {
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 15px monospace';
 
+    const tgt = config.targetWave;
+    const left = world.spawnQueue.length + world.enemies.length;
     let status: string;
-    if (world.wave === 0) status = `GET READY…  goal: wave ${config.targetWave}`;
-    else if (world.waveActive)
-      status = `WAVE ${world.wave}/${config.targetWave}  ·  ${world.spawnQueue.length + world.enemies.length} left`;
-    else status = `WAVE ${world.wave}/${config.targetWave} CLEARED  ·  next in ${Math.ceil(world.betweenTimer)}s`;
+    if (!world.started) status = `PREP · build your maze, then press ▶ Start  (goal: wave ${tgt})`;
+    else if (world.wave === 0) status = `GET READY…  goal: survive to wave ${tgt}`;
+    else if (world.reachedTarget)
+      status = world.waveActive
+        ? `WAVE ${world.wave}  ·  ENDLESS ★${tgt}  ·  ${left} left`
+        : `WAVE ${world.wave} CLEARED  ·  ENDLESS ★${tgt}  ·  next in ${Math.ceil(world.betweenTimer)}s`;
+    else if (world.waveActive) status = `WAVE ${world.wave}/${tgt}  ·  ${left} left`;
+    else status = `WAVE ${world.wave}/${tgt} CLEARED  ·  next in ${Math.ceil(world.betweenTimer)}s`;
 
     ctx.fillStyle = '#58a6ff';
     ctx.textAlign = 'left';
@@ -276,22 +419,28 @@ export class Game {
     ctx.textAlign = 'right';
     ctx.fillText(`♥ ${world.lives}   $ ${this.money}`, W - 10, 14);
 
-    if (world.gameOver || world.gameWon) {
+    // Transient "the swarm evolved" banner.
+    if (this.learnTimer > 0) {
+      ctx.fillStyle = 'rgba(217,83,59,0.9)';
+      ctx.fillRect(0, 30, W, 30);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`⚠ ${this.learnBanner} ⚠`, W / 2, 45);
+    }
+
+    if (world.gameOver) {
       ctx.fillStyle = 'rgba(0,0,0,0.65)';
       ctx.fillRect(0, 0, W, ROWS * TILE);
       ctx.textAlign = 'center';
       ctx.font = 'bold 34px monospace';
-      if (world.gameWon) {
-        ctx.fillStyle = '#3fb950';
-        ctx.fillText('YOU SURVIVED', W / 2, (ROWS * TILE) / 2 - 16);
-      } else {
-        ctx.fillStyle = '#f85149';
-        ctx.fillText('GAME OVER', W / 2, (ROWS * TILE) / 2 - 16);
-      }
+      const made = world.reachedTarget;
+      ctx.fillStyle = made ? '#3fb950' : '#f85149';
+      ctx.fillText(made ? 'TARGET CLEARED!' : 'GAME OVER', W / 2, (ROWS * TILE) / 2 - 16);
       ctx.fillStyle = '#c9d1d9';
       ctx.font = '15px monospace';
-      const tail = world.gameWon ? `cleared all ${config.targetWave} waves` : `reached wave ${world.wave}`;
-      ctx.fillText(`${tail} · ${world.kills} kills · ${world.lives} lives left`, W / 2, (ROWS * TILE) / 2 + 16);
+      const passed = made ? ` · ★ passed wave ${config.targetWave}` : ` · target was ${config.targetWave}`;
+      ctx.fillText(`died on wave ${world.wave} · ${world.kills} kills${passed}`, W / 2, (ROWS * TILE) / 2 + 16);
       ctx.fillText('press "Reset map" to play again', W / 2, (ROWS * TILE) / 2 + 40);
     }
   }

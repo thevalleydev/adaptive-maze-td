@@ -55,22 +55,40 @@ export interface Config {
   spawnBuffer: number; // no-build radius (tiles) around the spawn mouth
   killRewardMult: number; // global multiplier on kill rewards (lower = tighter economy)
   towerCostGrowth: number; // each extra tower of a kind costs +this fraction of base
+
+  // --- Upgrades ---
+  maxTowerLevel: number; // towers can be upgraded up to this level
+  upgradeCostMult: number; // cost to reach next level = base cost * level * this
+
+  // --- Map generation ---
+  rockDensity: number; // fraction of tiles seeded as natural rock obstacles
+
+  // --- Creep evolution (the arms race) ---
+  climbSpeedMult: number; // climbing creeps move at this fraction of normal speed
+  wallCostClimb: number; // A* cost to cross a structure once climb is learned
+  bombTime: number; // seconds a bomber spends destroying a wall
+  frustrationToBomb: number; // forced-climber deaths before the swarm learns to bomb
+
+  // --- Player level-ups ---
+  levelUpEvery: number; // grant a level-up every N waves cleared
+  levelUpDiscount: number; // "cheaper" reward: tower cost multiplier (e.g. 0.85)
+  levelUpBuff: number; // "stronger" reward: tower damage multiplier (e.g. 1.25)
 }
 
 export const config: Config = {
   pressureRate: 9,
   decayRate: 1.5,
   crackThreshold: 30,
-  collapseThreshold: 80,
+  collapseThreshold: 55,
   telegraphDuration: 2.5,
   pressureAvoidance: 3,
 
   pressurePerDamage: 0.1,
-  pressurePerKill: 6,
+  pressurePerKill: 12,
 
   pressureTowerDebuff: 0.55,
 
-  betweenWaveDecay: 0.5,
+  betweenWaveDecay: 0.35,
   crackHealMargin: 10,
 
   crackedCost: 1.5,
@@ -83,16 +101,30 @@ export const config: Config = {
   spawnInterval: 0.7,
   interWaveTime: 5,
   waveBaseCount: 8,
-  waveCountGrowth: 2,
-  waveHpGrowth: 0.25,
-  targetWave: 12,
+  waveCountGrowth: 1,
+  waveHpGrowth: 0.15, // COMPOUNDING (see World.startWave): ~7x by wave 15, ~14x by 20, ~29x by 25
+  targetWave: 15,
 
   enemySpeed: 2.4,
-  enemyHp: 60,
+  enemyHp: 50,
 
   spawnBuffer: 2,
   killRewardMult: 1,
   towerCostGrowth: 0.08,
+
+  maxTowerLevel: 3,
+  upgradeCostMult: 0.9,
+
+  rockDensity: 0.06,
+
+  climbSpeedMult: 0.4,
+  wallCostClimb: 25,
+  bombTime: 2.5,
+  frustrationToBomb: 12,
+
+  levelUpEvery: 5,
+  levelUpDiscount: 0.85,
+  levelUpBuff: 1.25,
 };
 
 // View toggles (not part of the tuning model, but live).
@@ -101,10 +133,11 @@ export const view = {
   showPath: true,
   paused: false,
   collapseWrecksTowers: true, // a tile collapsing destroys towers on adjacent tiles
+  enemyAdaptation: true, // creeps learn to climb/bomb walls (the arms race)
 };
 
 // --- Tower types -------------------------------------------------------------
-export type TowerKind = 'gun' | 'frost' | 'cannon';
+export type TowerKind = 'gun' | 'frost' | 'cannon' | 'vent' | 'wall';
 
 export interface TowerDef {
   name: string;
@@ -114,13 +147,26 @@ export interface TowerDef {
   fireRate: number; // shots/sec at zero pressure
   color: string;
   hotkey: string;
+  blurb: string; // one-line role description for the UI
   splashRadius?: number; // cannon: AoE radius in tiles
   slowAmount?: number; // frost: speed multiplier applied to hit enemies (e.g. 0.5)
   slowDuration?: number; // frost: seconds the slow lasts
+  ventRadius?: number; // vent: pressure-drain half-extent (Chebyshev) — a square area
+  ventRate?: number; // vent: pressure removed per covered tile per second
+  structural?: boolean; // wall: inert blocker, flat cost, no upgrades, wider collapse blast
 }
 
 export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
-  gun: { name: 'Gun', cost: 50, damage: 18, range: 2.6, fireRate: 2.0, color: '#1f6feb', hotkey: '1' },
+  gun: {
+    name: 'Gun',
+    cost: 50,
+    damage: 18,
+    range: 2.6,
+    fireRate: 2.0,
+    color: '#1f6feb',
+    hotkey: '1',
+    blurb: 'Cheap, reliable single-target DPS.',
+  },
   frost: {
     name: 'Frost',
     cost: 70,
@@ -131,20 +177,54 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     slowAmount: 0.5,
     slowDuration: 1.2,
     hotkey: '2',
+    blurb: 'Slows enemies; clumps them for splash.',
   },
   cannon: {
+    // Heavy hitter: big per-shot damage (≈38 DPS single-target, ~Gun parity) so
+    // it's viable even when splash doesn't land, with a large per-hit punch that
+    // matters against compounding enemy HP. Splash is upside, not its whole case.
+    // Self-limiting: hitting a clump dumps a lot of pressure -> collapse risk.
     name: 'Cannon',
-    cost: 95,
-    damage: 14,
+    cost: 85,
+    damage: 45,
     range: 2.9,
-    fireRate: 0.8,
+    fireRate: 0.85,
     color: '#d29922',
-    splashRadius: 1.4,
+    splashRadius: 1.6,
     hotkey: '3',
+    blurb: 'Heavy hits + splash; great vs tanks/clumps.',
+  },
+  vent: {
+    // The counter-verb to collapse: drains pressure from nearby ground so you can
+    // hold a hot killbox instead of watching it cave in. Deals no damage.
+    name: 'Vent',
+    cost: 70,
+    damage: 0,
+    range: 2.0,
+    fireRate: 0,
+    color: '#7ee0c0',
+    hotkey: '4',
+    ventRadius: 2, // Chebyshev half-extent → a 5×5 square of fully-vented tiles
+    ventRate: 10, // gentle per-tile drain: eases collapse over an area, never an off-switch
+    blurb: 'Drains pressure in a 5×5 square — eases collapse.',
+  },
+  wall: {
+    // Cheap, inert blocker for shaping the maze. Gives flow control, but a
+    // collapse wrecks walls at DOUBLE a tower's blast radius — overbuilding is a
+    // false sense of security (a cave-in tears a wide hole and you scramble).
+    name: 'Wall',
+    cost: 12,
+    damage: 0,
+    range: 0,
+    fireRate: 0,
+    color: '#5a6472',
+    hotkey: '5',
+    structural: true,
+    blurb: 'Cheap blocker; no weapon. Collapse hits walls extra hard.',
   },
 };
 
-export const TOWER_ORDER: TowerKind[] = ['gun', 'frost', 'cannon'];
+export const TOWER_ORDER: TowerKind[] = ['gun', 'frost', 'cannon', 'vent', 'wall'];
 
 // --- Enemy types -------------------------------------------------------------
 export type EnemyKind = 'runner' | 'grunt' | 'brute';
@@ -157,12 +237,13 @@ export interface EnemyDef {
   pressureMult: number; // movement-pressure contribution multiplier
   color: string;
   radius: number; // fraction of a tile
+  bomber?: boolean; // once the swarm learns to bomb, this type destroys walls (others climb)
 }
 
 export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
   runner: { name: 'Runner', hpMult: 0.5, speedMult: 1.7, reward: 6, pressureMult: 0.8, color: '#f0c43e', radius: 0.2 },
   grunt: { name: 'Grunt', hpMult: 1.0, speedMult: 1.0, reward: 8, pressureMult: 1.0, color: '#f0883e', radius: 0.26 },
-  brute: { name: 'Brute', hpMult: 3.2, speedMult: 0.62, reward: 18, pressureMult: 1.7, color: '#d9533b', radius: 0.34 },
+  brute: { name: 'Brute', hpMult: 3.2, speedMult: 0.62, reward: 18, pressureMult: 1.7, color: '#d9533b', radius: 0.34, bomber: true },
 };
 
 // Slider metadata: [key, label, min, max, step]
@@ -192,4 +273,8 @@ export const sliders: [keyof Config, string, number, number, number][] = [
   ['spawnBuffer', 'No-build radius', 0, 5, 1],
   ['killRewardMult', 'Reward x', 0, 2, 0.05],
   ['towerCostGrowth', 'Cost growth', 0, 0.5, 0.01],
+  ['climbSpeedMult', 'Climb speed x', 0.1, 1, 0.05],
+  ['frustrationToBomb', 'Bomb after', 1, 40, 1],
+  ['levelUpBuff', 'LvlUp buff x', 1, 2, 0.05],
+  ['levelUpDiscount', 'LvlUp cost x', 0.5, 1, 0.05],
 ];

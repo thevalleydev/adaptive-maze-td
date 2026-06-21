@@ -65,9 +65,20 @@
       }
       button:hover { border-color: var(--accent); }
       #towers { display: flex; flex-direction: column; gap: 5px; margin-bottom: 6px; }
-      .tower-btn { text-align: left; }
-      .tower-btn b { color: var(--accent); margin-right: 4px; }
+      .tower-btn { text-align: left; display: flex; align-items: center; gap: 6px; }
+      .tower-btn b { color: var(--accent); }
+      .tower-btn .cost { margin-left: auto; color: #3fb950; font-weight: bold; }
+      .tower-btn.unaffordable { opacity: 0.45; }
+      .tower-btn.unaffordable .cost { color: #f85149; }
       .muted { color: var(--muted); }
+      .seed-row { gap: 6px; }
+      .seed-row input { flex: 1 1 auto; min-width: 0; background: #0d1117; color: var(--text);
+        border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; font: inherit; }
+      .seed-row button { flex: 0 0 auto; }
+      #start-btn { width: 100%; background: #238636; border-color: #2ea043; font-weight: bold; padding: 7px; }
+      #start-btn:hover { background: #2ea043; }
+      #levelup { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
+      .lvl-btn { text-align: left; border-left: 4px solid #f0c43e; }
     </style>
   </head>
   <body>

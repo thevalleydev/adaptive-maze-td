@@ -20,6 +20,15 @@ export class Enemy {
   dead = false;
   leaked = false;
 
+  // --- Adaptation state ---
+  blocked = false; // no route at current ability (player sealed the path) — idles
+  climbing = false; // currently traversing a structure tile (slow, no damage to it)
+  everClimbed = false; // has had to climb — feeds the bomb-frustration metric
+  bombing = false; // a bomber pausing to destroy a wall ahead
+  bombTimer = 0;
+  bombTarget: Pt | null = null;
+  bombedTile: Pt | null = null; // set when a bomb completes; World destroys & clears it
+
   constructor(grid: Grid, kind: EnemyKind, hp: number) {
     this.kind = kind;
     this.x = grid.spawn.x;
@@ -40,41 +49,78 @@ export class Enemy {
     this.slowTimer = Math.max(this.slowTimer, duration);
   }
 
-  private repath(grid: Grid) {
+  private repath(grid: Grid, wallCost: number) {
     const from = { x: Math.round(this.x), y: Math.round(this.y) };
-    const p = findPath(grid, from, grid.exit);
+    const p = findPath(grid, from, grid.exit, wallCost);
     if (p && p.length) {
       this.path = p;
       this.pathIndex = p.length > 1 ? 1 : 0;
+      this.blocked = false;
+    } else {
+      this.path = [];
+      this.pathIndex = 0;
+      this.blocked = true; // no route at this ability level
     }
     this.knownVersion = grid.graphVersion;
   }
 
-  update(dt: number, grid: Grid) {
+  update(dt: number, grid: Grid, opts: { wallCost?: number; bombLearned?: boolean; onBlocked?: () => void } = {}) {
     if (this.dead || this.leaked) return;
+    const wallCost = opts.wallCost ?? Infinity;
 
     if (this.slowTimer > 0) {
       this.slowTimer -= dt;
       if (this.slowTimer <= 0) this.slowFactor = 1;
     }
 
-    // Event-driven repath when the graph changes (collapse / tower edits),
-    // plus a low-frequency tick so enemies steer around the pressure gradient.
+    // Repath on graph change, on a low-frequency tick, or while blocked (so a
+    // newly-learned ability or a bombed-open gap is picked up promptly).
     this.repathTimer -= dt;
-    if (this.knownVersion !== grid.graphVersion || this.repathTimer <= 0) {
-      this.repath(grid);
+    if (this.knownVersion !== grid.graphVersion || this.repathTimer <= 0 || this.blocked) {
+      this.repath(grid, wallCost);
       this.repathTimer = 1.2;
     }
+
+    if (this.blocked) {
+      // The player sealed the path. Ask the swarm to adapt (learn to climb); idle
+      // this frame — next frame the finite wallCost yields a route.
+      opts.onBlocked?.();
+      return;
+    }
     if (this.pathIndex >= this.path.length) {
-      this.leaked = true;
+      this.leaked = true; // reached the exit
       return;
     }
 
+    // Bombing: a bomber that has learned to bomb stops at a wall ahead and
+    // destroys it rather than climbing over.
+    const nextWp = this.path[this.pathIndex];
+    const nextTile = grid.at(nextWp.x, nextWp.y);
+    const nextIsStructure = !!nextTile && nextTile.blocked && !nextTile.rock;
+    if (nextIsStructure && this.def.bomber && opts.bombLearned) {
+      this.bombing = true;
+      this.bombTarget = { x: nextWp.x, y: nextWp.y };
+      this.bombTimer += dt;
+      if (this.bombTimer >= config.bombTime) {
+        this.bombedTile = { x: nextWp.x, y: nextWp.y }; // World destroys it
+        this.bombing = false;
+        this.bombTimer = 0;
+      }
+      return; // stationary while bombing
+    }
+    this.bombing = false;
+    this.bombTimer = 0;
+
     const tile = grid.at(Math.round(this.x), Math.round(this.y));
-    if (tile) grid.addPressure(tile.x, tile.y, config.pressureRate * this.def.pressureMult * dt);
+    const onStructure = !!tile && tile.blocked && !tile.rock;
+    this.climbing = onStructure;
+    if (onStructure) this.everClimbed = true;
+    // Pressure only accrues on real ground (not while clambering over a wall).
+    if (tile && !onStructure) grid.addPressure(tile.x, tile.y, config.pressureRate * this.def.pressureMult * dt);
 
     const terrain = tile ? grid.speedMult(tile) : 1;
-    const speed = config.enemySpeed * this.def.speedMult * terrain * this.slowFactor;
+    const climbMul = onStructure ? config.climbSpeedMult : 1;
+    const speed = config.enemySpeed * this.def.speedMult * terrain * this.slowFactor * climbMul;
     let budget = speed * dt;
 
     while (budget > 0 && this.pathIndex < this.path.length) {
@@ -112,6 +158,7 @@ export class Tower {
   kind: TowerKind;
   x: number;
   y: number;
+  level = 1;
   cooldown = 0;
   targetId: number | null = null;
 
@@ -123,6 +170,20 @@ export class Tower {
 
   get def() {
     return TOWER_DEFS[this.kind];
+  }
+
+  // Per-level upgrade scaling.
+  get damage() {
+    return this.def.damage * (1 + 0.6 * (this.level - 1));
+  }
+  get fireRateEff() {
+    return this.def.fireRate * (1 + 0.15 * (this.level - 1));
+  }
+  get rangeEff() {
+    return this.def.range + 0.25 * (this.level - 1);
+  }
+  get ventRateEff() {
+    return (this.def.ventRate ?? 0) * (1 + 0.5 * (this.level - 1));
   }
 
   // Highest pressure in the tower's 4-neighbourhood. The tower itself sits on a
@@ -141,15 +202,32 @@ export class Tower {
     return m;
   }
 
-  update(dt: number, enemies: Enemy[], grid: Grid): ShotLine | null {
-    this.cooldown -= dt;
+  update(dt: number, enemies: Enemy[], grid: Grid, dmgMul = 1): ShotLine | null {
     const def = this.def;
+
+    // Vent tower: drain pressure from a SQUARE area (binary — every tile in the
+    // square is fully vented). The counter to collapse; lets you hold a killbox.
+    if (def.ventRate) {
+      const ext = Math.max(1, Math.round(def.ventRadius ?? def.range));
+      const rate = this.ventRateEff;
+      for (let dy = -ext; dy <= ext; dy++) {
+        for (let dx = -ext; dx <= ext; dx++) {
+          const t = grid.at(this.x + dx, this.y + dy);
+          if (t && t.pressure > 0) t.pressure = Math.max(0, t.pressure - rate * dt);
+        }
+      }
+      return null;
+    }
+
+    if (def.structural) return null; // walls are inert blockers — no targeting
+
+    this.cooldown -= dt;
 
     // Pressure degrades fire rate — a clustered killbox chokes itself.
     const frac = Math.min(1, this.localPressure(grid) / config.collapseThreshold);
-    const effRate = Math.max(0.05, def.fireRate * (1 - config.pressureTowerDebuff * frac));
+    const effRate = Math.max(0.05, this.fireRateEff * (1 - config.pressureTowerDebuff * frac));
 
-    const inRange = (e: Enemy) => Math.hypot(e.x - this.x, e.y - this.y) <= def.range;
+    const inRange = (e: Enemy) => Math.hypot(e.x - this.x, e.y - this.y) <= this.rangeEff;
     let target = enemies.find((e) => e.id === this.targetId && !e.dead && !e.leaked && inRange(e));
     if (!target) {
       this.targetId = null;
@@ -169,9 +247,10 @@ export class Tower {
     if (!target || this.cooldown > 0) return null;
     this.cooldown = 1 / effRate;
 
+    const dmg = this.damage * dmgMul;
     const hit = (e: Enemy) => {
-      e.hp -= def.damage;
-      grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerDamage * def.damage);
+      e.hp -= dmg;
+      grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerDamage * dmg);
       if (def.slowAmount && def.slowDuration) e.applySlow(def.slowAmount, def.slowDuration);
       if (e.hp <= 0) e.dead = true;
     };

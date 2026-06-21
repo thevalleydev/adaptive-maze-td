@@ -1,0 +1,8 @@
+node_modules/
+dist/
+# sim build artifact + regenerable outputs
+sim/_run.mjs
+sim/results.csv
+sim/results.json
+# local dev server log
+vite.log
