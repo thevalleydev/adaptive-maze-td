@@ -35,7 +35,9 @@ export function runGame(policy: Policy, opts: { dt?: number; maxSeconds?: number
   let prevWaveActive = false;
   let steps = 0;
 
-  while (!world.gameOver && !world.gameWon && steps < maxSteps) {
+  // For measurement we stop at the target milestone (success) or death. The
+  // browser game keeps playing past the target; the sim only cares if it got there.
+  while (!world.gameOver && !world.reachedTarget && steps < maxSteps) {
     policy.onTick(world, dt);
 
     // Snapshot tower positions AFTER the policy acts; anything missing after the
@@ -63,11 +65,11 @@ export function runGame(policy: Policy, opts: { dt?: number; maxSeconds?: number
     steps++;
   }
 
-  if (world.gameWon) wavesCleared = config.targetWave;
+  if (world.reachedTarget) wavesCleared = config.targetWave;
 
   return {
     policy: policy.name,
-    won: world.gameWon,
+    won: world.reachedTarget,
     reachedWave: world.wave,
     wavesCleared,
     firstLeakWave,

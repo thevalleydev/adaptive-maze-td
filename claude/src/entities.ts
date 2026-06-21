@@ -112,6 +112,7 @@ export class Tower {
   kind: TowerKind;
   x: number;
   y: number;
+  level = 1;
   cooldown = 0;
   targetId: number | null = null;
 
@@ -123,6 +124,20 @@ export class Tower {
 
   get def() {
     return TOWER_DEFS[this.kind];
+  }
+
+  // Per-level upgrade scaling.
+  get damage() {
+    return this.def.damage * (1 + 0.6 * (this.level - 1));
+  }
+  get fireRateEff() {
+    return this.def.fireRate * (1 + 0.15 * (this.level - 1));
+  }
+  get rangeEff() {
+    return this.def.range + 0.25 * (this.level - 1);
+  }
+  get ventRateEff() {
+    return (this.def.ventRate ?? 0) * (1 + 0.5 * (this.level - 1));
   }
 
   // Highest pressure in the tower's 4-neighbourhood. The tower itself sits on a
@@ -142,14 +157,31 @@ export class Tower {
   }
 
   update(dt: number, enemies: Enemy[], grid: Grid): ShotLine | null {
-    this.cooldown -= dt;
     const def = this.def;
+
+    // Vent tower: drain pressure from a SQUARE area (binary — every tile in the
+    // square is fully vented). The counter to collapse; lets you hold a killbox.
+    if (def.ventRate) {
+      const ext = Math.max(1, Math.round(def.ventRadius ?? def.range));
+      const rate = this.ventRateEff;
+      for (let dy = -ext; dy <= ext; dy++) {
+        for (let dx = -ext; dx <= ext; dx++) {
+          const t = grid.at(this.x + dx, this.y + dy);
+          if (t && t.pressure > 0) t.pressure = Math.max(0, t.pressure - rate * dt);
+        }
+      }
+      return null;
+    }
+
+    if (def.structural) return null; // walls are inert blockers — no targeting
+
+    this.cooldown -= dt;
 
     // Pressure degrades fire rate — a clustered killbox chokes itself.
     const frac = Math.min(1, this.localPressure(grid) / config.collapseThreshold);
-    const effRate = Math.max(0.05, def.fireRate * (1 - config.pressureTowerDebuff * frac));
+    const effRate = Math.max(0.05, this.fireRateEff * (1 - config.pressureTowerDebuff * frac));
 
-    const inRange = (e: Enemy) => Math.hypot(e.x - this.x, e.y - this.y) <= def.range;
+    const inRange = (e: Enemy) => Math.hypot(e.x - this.x, e.y - this.y) <= this.rangeEff;
     let target = enemies.find((e) => e.id === this.targetId && !e.dead && !e.leaked && inRange(e));
     if (!target) {
       this.targetId = null;
@@ -170,8 +202,8 @@ export class Tower {
     this.cooldown = 1 / effRate;
 
     const hit = (e: Enemy) => {
-      e.hp -= def.damage;
-      grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerDamage * def.damage);
+      e.hp -= this.damage;
+      grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerDamage * this.damage);
       if (def.slowAmount && def.slowDuration) e.applySlow(def.slowAmount, def.slowDuration);
       if (e.hp <= 0) e.dead = true;
     };

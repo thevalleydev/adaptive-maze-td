@@ -1,4 +1,4 @@
-import { Grid, Tile } from './grid';
+import { Grid, Tile, isWall } from './grid';
 
 export interface Pt {
   x: number;
@@ -79,7 +79,7 @@ export function findPath(grid: Grid, start: Pt, goal: Pt): Pt[] | null {
       const nx = cx + dx;
       const ny = cy + dy;
       const nt: Tile | null = grid.at(nx, ny);
-      if (!nt || nt.blocked) continue;
+      if (!nt || isWall(nt)) continue;
       const ni = grid.idx(nx, ny);
       if (closed[ni]) continue;
       const tentative = gScore[cur] + grid.enterCost(nt);

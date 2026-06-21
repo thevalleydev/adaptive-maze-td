@@ -55,6 +55,13 @@ export interface Config {
   spawnBuffer: number; // no-build radius (tiles) around the spawn mouth
   killRewardMult: number; // global multiplier on kill rewards (lower = tighter economy)
   towerCostGrowth: number; // each extra tower of a kind costs +this fraction of base
+
+  // --- Upgrades ---
+  maxTowerLevel: number; // towers can be upgraded up to this level
+  upgradeCostMult: number; // cost to reach next level = base cost * level * this
+
+  // --- Map generation ---
+  rockDensity: number; // fraction of tiles seeded as natural rock obstacles
 }
 
 export const config: Config = {
@@ -84,8 +91,8 @@ export const config: Config = {
   interWaveTime: 5,
   waveBaseCount: 8,
   waveCountGrowth: 1,
-  waveHpGrowth: 0.18,
-  targetWave: 12,
+  waveHpGrowth: 0.15, // COMPOUNDING (see World.startWave): ~7x by wave 15, ~14x by 20, ~29x by 25
+  targetWave: 15,
 
   enemySpeed: 2.4,
   enemyHp: 50,
@@ -93,6 +100,11 @@ export const config: Config = {
   spawnBuffer: 2,
   killRewardMult: 1,
   towerCostGrowth: 0.08,
+
+  maxTowerLevel: 3,
+  upgradeCostMult: 0.9,
+
+  rockDensity: 0.06,
 };
 
 // View toggles (not part of the tuning model, but live).
@@ -104,7 +116,7 @@ export const view = {
 };
 
 // --- Tower types -------------------------------------------------------------
-export type TowerKind = 'gun' | 'frost' | 'cannon';
+export type TowerKind = 'gun' | 'frost' | 'cannon' | 'vent' | 'wall';
 
 export interface TowerDef {
   name: string;
@@ -114,13 +126,26 @@ export interface TowerDef {
   fireRate: number; // shots/sec at zero pressure
   color: string;
   hotkey: string;
+  blurb: string; // one-line role description for the UI
   splashRadius?: number; // cannon: AoE radius in tiles
   slowAmount?: number; // frost: speed multiplier applied to hit enemies (e.g. 0.5)
   slowDuration?: number; // frost: seconds the slow lasts
+  ventRadius?: number; // vent: pressure-drain half-extent (Chebyshev) — a square area
+  ventRate?: number; // vent: pressure removed per covered tile per second
+  structural?: boolean; // wall: inert blocker, flat cost, no upgrades, wider collapse blast
 }
 
 export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
-  gun: { name: 'Gun', cost: 50, damage: 18, range: 2.6, fireRate: 2.0, color: '#1f6feb', hotkey: '1' },
+  gun: {
+    name: 'Gun',
+    cost: 50,
+    damage: 18,
+    range: 2.6,
+    fireRate: 2.0,
+    color: '#1f6feb',
+    hotkey: '1',
+    blurb: 'Cheap, reliable single-target DPS.',
+  },
   frost: {
     name: 'Frost',
     cost: 70,
@@ -131,20 +156,54 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     slowAmount: 0.5,
     slowDuration: 1.2,
     hotkey: '2',
+    blurb: 'Slows enemies; clumps them for splash.',
   },
   cannon: {
+    // Heavy hitter: big per-shot damage (≈38 DPS single-target, ~Gun parity) so
+    // it's viable even when splash doesn't land, with a large per-hit punch that
+    // matters against compounding enemy HP. Splash is upside, not its whole case.
+    // Self-limiting: hitting a clump dumps a lot of pressure -> collapse risk.
     name: 'Cannon',
-    cost: 95,
-    damage: 14,
+    cost: 85,
+    damage: 45,
     range: 2.9,
-    fireRate: 0.8,
+    fireRate: 0.85,
     color: '#d29922',
-    splashRadius: 1.4,
+    splashRadius: 1.6,
     hotkey: '3',
+    blurb: 'Heavy hits + splash; great vs tanks/clumps.',
+  },
+  vent: {
+    // The counter-verb to collapse: drains pressure from nearby ground so you can
+    // hold a hot killbox instead of watching it cave in. Deals no damage.
+    name: 'Vent',
+    cost: 70,
+    damage: 0,
+    range: 2.0,
+    fireRate: 0,
+    color: '#7ee0c0',
+    hotkey: '4',
+    ventRadius: 2, // Chebyshev half-extent → a 5×5 square of fully-vented tiles
+    ventRate: 10, // gentle per-tile drain: eases collapse over an area, never an off-switch
+    blurb: 'Drains pressure in a 5×5 square — eases collapse.',
+  },
+  wall: {
+    // Cheap, inert blocker for shaping the maze. Gives flow control, but a
+    // collapse wrecks walls at DOUBLE a tower's blast radius — overbuilding is a
+    // false sense of security (a cave-in tears a wide hole and you scramble).
+    name: 'Wall',
+    cost: 12,
+    damage: 0,
+    range: 0,
+    fireRate: 0,
+    color: '#5a6472',
+    hotkey: '5',
+    structural: true,
+    blurb: 'Cheap blocker; no weapon. Collapse hits walls extra hard.',
   },
 };
 
-export const TOWER_ORDER: TowerKind[] = ['gun', 'frost', 'cannon'];
+export const TOWER_ORDER: TowerKind[] = ['gun', 'frost', 'cannon', 'vent', 'wall'];
 
 // --- Enemy types -------------------------------------------------------------
 export type EnemyKind = 'runner' | 'grunt' | 'brute';

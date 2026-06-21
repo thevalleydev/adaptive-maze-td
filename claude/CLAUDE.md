@@ -44,11 +44,19 @@ Smoke test of the DOM-free core: `npx esbuild src/smoketest.ts --bundle --platfo
   furthest-along; pressure degrades fire rate; splash/slow).
 - `src/config.ts` — every tunable knob + slider metadata + `TOWER_DEFS` / `ENEMY_DEFS`.
 - `src/ui.ts` — slider/toggle panel.
+- `src/rng.ts` — seeded PRNG (mulberry32) + seed/code helpers. Map generation uses it.
 - `src/sim/` — `policies.ts` (Static layouts incl. the user's spawnBox, + a Reactive bot),
   `metrics.ts` (per-run stats + difficulty-wall detection), `sweep.ts`, `run.ts` (CLI).
 
-Determinism: the core has no `Math.random`/`Date`; spawn composition is index-based, so
-sim runs are reproducible.
+Determinism: the core has no `Math.random`/`Date`; map gen uses a seeded RNG and the
+browser loop is **fixed-timestep** (`main.ts`), so a run is reproducible from its seed.
+The sim constructs `new World()` (seed `null` = classic centered empty map, no rocks).
+
+Seeded runs: `?seed=<code>` in the URL (or the panel's New/Replay/seed input). A seed
+fixes the spawn/exit positions, scattered rock obstacles, and is the basis for shareable
+maps + future daily challenges. Upgrades: click your own tower to level it up (per-level
++dmg/+rate/+range; Vent gets +drain). Vent tower (key 4) drains nearby pressure — the
+counter to collapse.
 
 ## Balance model & findings (from the sim)
 

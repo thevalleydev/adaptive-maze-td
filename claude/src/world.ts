@@ -1,7 +1,8 @@
 import { config, view, TowerKind, TOWER_DEFS, EnemyKind, ENEMY_DEFS } from './config';
-import { Grid } from './grid';
+import { Grid, COLS, ROWS } from './grid';
 import { findPath, Pt } from './astar';
 import { Enemy, Tower, ShotLine } from './entities';
+import { RNG } from './rng';
 
 export interface Shot extends ShotLine {
   ttl: number;
@@ -27,12 +28,51 @@ export class World {
   currentWaveHp = config.enemyHp;
   spawnTimer = 0;
   betweenTimer = 2; // initial breather before wave 1
-  lives = 20;
+  lives = 12;
   gameOver = false;
-  gameWon = false;
+  reachedTarget = false; // crossed targetWave — milestone, not an end; play continues
 
   previewPath: Pt[] | null = null;
   previewVersion = -1;
+
+  // null = "classic" centered empty map (used by the sim); a number generates a
+  // deterministic map (spawn/exit + rock obstacles) so every run is reproducible.
+  seed: number | null = null;
+
+  constructor(seed: number | null = null) {
+    this.seed = seed;
+    this.reset();
+  }
+
+  loadSeed(seed: number | null) {
+    this.seed = seed;
+    this.reset();
+  }
+
+  private applyGeneration() {
+    if (this.seed === null) return; // classic centered map, no rocks
+    const rng = new RNG(this.seed);
+    const g = this.grid;
+    g.spawn = { x: 0, y: 2 + rng.int(ROWS - 4) };
+    g.exit = { x: COLS - 1, y: 2 + rng.int(ROWS - 4) };
+    const target = Math.floor(ROWS * COLS * config.rockDensity);
+    let placed = 0;
+    let attempts = 0;
+    while (placed < target && attempts < target * 12) {
+      attempts++;
+      const x = rng.int(COLS);
+      const y = rng.int(ROWS);
+      const t = g.at(x, y);
+      if (!t || t.rock) continue;
+      if (g.isSpawnOrExit(x, y) || this.nearSpawn(x, y)) continue;
+      t.rock = true;
+      if (!findPath(g, g.spawn, g.exit)) {
+        t.rock = false; // keep the map solvable
+        continue;
+      }
+      placed++;
+    }
+  }
 
   // --- Building -------------------------------------------------------------
   nearSpawn(x: number, y: number): boolean {
@@ -42,18 +82,36 @@ export class World {
   canBuildOn(x: number, y: number): boolean {
     const t = this.grid.at(x, y);
     if (!t) return false;
-    if (t.blocked) return false;
+    if (t.blocked || t.rock) return false;
     if (this.grid.isSpawnOrExit(x, y)) return false;
     if (t.state === 'collapsed') return false;
     if (this.nearSpawn(x, y)) return false; // can't wall the mouth shut
     return true;
   }
 
+  // Cost to take the tower on this tile to its next level (null if max/none).
+  upgradeCostAt(x: number, y: number): number | null {
+    const t = this.towers.find((tw) => tw.x === x && tw.y === y);
+    if (!t || TOWER_DEFS[t.kind].structural || t.level >= config.maxTowerLevel) return null;
+    return Math.round(TOWER_DEFS[t.kind].cost * t.level * config.upgradeCostMult);
+  }
+
+  tryUpgradeTower(x: number, y: number): boolean {
+    const t = this.towers.find((tw) => tw.x === x && tw.y === y);
+    const cost = this.upgradeCostAt(x, y);
+    if (!t || cost === null || this.money < cost) return false;
+    this.money -= cost;
+    t.level++;
+    return true;
+  }
+
   // Cost escalates with how many of that kind you already own, so thick walls
   // must be earned rather than spammed once the economy snowballs.
   towerCost(kind: TowerKind): number {
+    const def = TOWER_DEFS[kind];
+    if (def.structural) return def.cost; // walls: flat, cheap, spammable for shaping
     const owned = this.towers.reduce((n, t) => n + (t.kind === kind ? 1 : 0), 0);
-    return Math.round(TOWER_DEFS[kind].cost * (1 + config.towerCostGrowth * owned));
+    return Math.round(def.cost * (1 + config.towerCostGrowth * owned));
   }
 
   tryPlaceTower(x: number, y: number, kind: TowerKind): boolean {
@@ -102,13 +160,18 @@ export class World {
       else q.push('grunt');
     }
     this.spawnQueue = q;
-    this.currentWaveHp = config.enemyHp * (1 + (this.wave - 1) * config.waveHpGrowth);
+    // Compounding HP: a linear ramp gets outpaced by a player who keeps adding
+    // towers (space is finite, so DPS plateaus). Exponential growth guarantees
+    // that even a maxed defense eventually drowns — death comes, the only
+    // question is which wave.
+    this.currentWaveHp = config.enemyHp * Math.pow(1 + config.waveHpGrowth, this.wave - 1);
     this.spawnTimer = 0;
     this.waveActive = true;
   }
 
   reset() {
     this.grid = new Grid();
+    this.applyGeneration();
     this.enemies = [];
     this.towers = [];
     this.shots = [];
@@ -120,15 +183,15 @@ export class World {
     this.spawnQueue = [];
     this.spawnTimer = 0;
     this.betweenTimer = 2;
-    this.lives = 20;
+    this.lives = 12;
     this.gameOver = false;
-    this.gameWon = false;
+    this.reachedTarget = false;
     this.previewVersion = -1;
   }
 
   // --- Per-frame simulation -------------------------------------------------
   update(dt: number) {
-    if (this.gameOver || this.gameWon) return;
+    if (this.gameOver) return; // only death ends the run; the target is endless beyond
 
     // Wave state machine.
     if (this.waveActive) {
@@ -142,11 +205,12 @@ export class World {
         }
       } else if (this.enemies.length === 0) {
         // Wave cleared: dump the bulk of pressure (the breather cools the map),
-        // then either win the run or queue the next wave.
+        // flag the target milestone, then ALWAYS queue the next wave — the run
+        // only ends when you die, so you can see how far past the target you get.
         this.waveActive = false;
         this.grid.dissipate(config.betweenWaveDecay);
-        if (this.wave >= config.targetWave) this.gameWon = true;
-        else this.betweenTimer = config.interWaveTime;
+        if (this.wave >= config.targetWave) this.reachedTarget = true;
+        this.betweenTimer = config.interWaveTime;
       }
     } else {
       this.betweenTimer -= dt;
@@ -155,16 +219,15 @@ export class World {
 
     this.grid.update(dt);
 
-    // A collapse takes out towers on the ground next to it — clustering punished.
+    // A collapse wrecks nearby structures — towers within 1 tile, WALLS within 2
+    // (overbuilding a cheap maze is a false sense of security: a cave-in tears a
+    // wide hole through it). Clustering is punished either way.
     if (view.collapseWrecksTowers && this.grid.justCollapsed.length) {
-      for (const t of this.grid.justCollapsed) {
-        for (const [dx, dy] of [
-          [1, 0],
-          [-1, 0],
-          [0, 1],
-          [0, -1],
-        ]) {
-          this.destroyTowerAt(t.x + dx, t.y + dy);
+      for (const ct of this.grid.justCollapsed) {
+        for (const tw of [...this.towers]) {
+          const md = Math.abs(tw.x - ct.x) + Math.abs(tw.y - ct.y);
+          const reach = TOWER_DEFS[tw.kind].structural ? 2 : 1;
+          if (md <= reach) this.destroyTowerAt(tw.x, tw.y);
         }
       }
     }
