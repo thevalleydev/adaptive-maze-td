@@ -11,6 +11,8 @@ export class Game {
   hover: Pt | null = null;
   fps = 0;
   onSeedChange?: (seed: number | null) => void;
+  learnBanner = '';
+  learnTimer = 0;
 
   ctx: CanvasRenderingContext2D;
 
@@ -42,6 +44,25 @@ export class Game {
 
   get seed() {
     return this.world.seed;
+  }
+  get started() {
+    return this.world.started;
+  }
+  get awaitingLevelUp() {
+    return this.world.awaitingLevelUp;
+  }
+  get levelUpOptions() {
+    return this.world.levelUpOptions;
+  }
+  get evolution() {
+    return this.world.evolution;
+  }
+
+  start() {
+    this.world.start();
+  }
+  chooseLevelUp(i: number) {
+    this.world.chooseLevelUp(i);
   }
 
   reset() {
@@ -87,6 +108,11 @@ export class Game {
   update(dt: number) {
     if (view.paused) return;
     this.world.update(dt);
+    if (this.world.justLearned) {
+      this.learnBanner = this.world.justLearned === 'climb' ? 'THE SWARM LEARNED TO CLIMB' : 'THE SWARM LEARNED TO BOMB';
+      this.learnTimer = 3.5;
+    }
+    if (this.learnTimer > 0) this.learnTimer -= dt;
   }
 
   render() {
@@ -239,13 +265,39 @@ export class Game {
       const cx = e.x * TILE + TILE / 2;
       const cy = e.y * TILE + TILE / 2;
       const def = ENEMY_DEFS[e.kind];
+      // Bombing target tile telegraph (drawn under the enemy).
+      if (e.bombing && e.bombTarget) {
+        const tx = e.bombTarget.x * TILE;
+        const ty = e.bombTarget.y * TILE;
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 70);
+        ctx.fillStyle = `rgba(255,120,40,${0.25 + 0.45 * pulse})`;
+        ctx.fillRect(tx, ty, TILE, TILE);
+      }
       ctx.fillStyle = def.color;
       ctx.beginPath();
       ctx.arc(cx, cy, TILE * def.radius, 0, Math.PI * 2);
       ctx.fill();
-      if (e.slowFactor < 1) {
+      if (e.climbing) {
+        // Scaling a wall — dashed light outline.
+        ctx.strokeStyle = 'rgba(220,220,230,0.95)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.lineWidth = 1;
+      } else if (e.slowFactor < 1) {
         ctx.strokeStyle = '#3fd6ff';
         ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      if (e.bombing) {
+        // Fuse arc filling toward detonation.
+        const p = Math.min(1, e.bombTimer / config.bombTime);
+        ctx.strokeStyle = 'rgba(255,140,40,0.95)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(cx, cy, TILE * 0.4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
       }
@@ -345,7 +397,8 @@ export class Game {
     const tgt = config.targetWave;
     const left = world.spawnQueue.length + world.enemies.length;
     let status: string;
-    if (world.wave === 0) status = `GET READY…  goal: survive to wave ${tgt}`;
+    if (!world.started) status = `PREP · build your maze, then press ▶ Start  (goal: wave ${tgt})`;
+    else if (world.wave === 0) status = `GET READY…  goal: survive to wave ${tgt}`;
     else if (world.reachedTarget)
       status = world.waveActive
         ? `WAVE ${world.wave}  ·  ENDLESS ★${tgt}  ·  ${left} left`
@@ -365,6 +418,16 @@ export class Game {
     ctx.fillStyle = world.lives <= 5 ? '#f85149' : '#3fb950';
     ctx.textAlign = 'right';
     ctx.fillText(`♥ ${world.lives}   $ ${this.money}`, W - 10, 14);
+
+    // Transient "the swarm evolved" banner.
+    if (this.learnTimer > 0) {
+      ctx.fillStyle = 'rgba(217,83,59,0.9)';
+      ctx.fillRect(0, 30, W, 30);
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 16px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`⚠ ${this.learnBanner} ⚠`, W / 2, 45);
+    }
 
     if (world.gameOver) {
       ctx.fillStyle = 'rgba(0,0,0,0.65)';

@@ -95,6 +95,29 @@ export class StaticPolicy implements Policy {
   }
 }
 
+// Fully seals the path with a cheap wall (no gap) and puts guns just behind it
+// to slaughter climbers — to verify the creep evolution: they should learn to
+// climb (forced), then escalate to bombing (frustrated). Builds incrementally.
+export class SealPolicy implements Policy {
+  name = 'seal';
+  sells = 0;
+  onStart(world: World) {
+    this.build(world);
+  }
+  onTick(world: World) {
+    this.build(world);
+  }
+  private build(world: World) {
+    for (let y = 0; y < ROWS; y++) world.tryPlaceTower(13, y, 'wall'); // full seal FIRST, no gap
+    // Guns near the spawn/exit row first (that's where climbers cross) so the
+    // affordable ones actually kill — building frustration toward bombing.
+    const cy = world.grid.exit.y;
+    const order = [0, -1, 1, -2, 2, -3, 3, -4, 4].map((d) => cy + d);
+    for (const y of order) world.tryPlaceTower(12, y, 'gun');
+    for (const y of order) world.tryPlaceTower(11, y, 'gun');
+  }
+}
+
 // Actively adapts: relocate any tower about to be wrecked, and keep the current
 // lane covered with guns on the coolest available ground. The "skilled" upper
 // bound — the gap vs. StaticPolicy is the skill headroom.

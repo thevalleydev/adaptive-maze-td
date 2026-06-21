@@ -62,6 +62,17 @@ export interface Config {
 
   // --- Map generation ---
   rockDensity: number; // fraction of tiles seeded as natural rock obstacles
+
+  // --- Creep evolution (the arms race) ---
+  climbSpeedMult: number; // climbing creeps move at this fraction of normal speed
+  wallCostClimb: number; // A* cost to cross a structure once climb is learned
+  bombTime: number; // seconds a bomber spends destroying a wall
+  frustrationToBomb: number; // forced-climber deaths before the swarm learns to bomb
+
+  // --- Player level-ups ---
+  levelUpEvery: number; // grant a level-up every N waves cleared
+  levelUpDiscount: number; // "cheaper" reward: tower cost multiplier (e.g. 0.85)
+  levelUpBuff: number; // "stronger" reward: tower damage multiplier (e.g. 1.25)
 }
 
 export const config: Config = {
@@ -105,6 +116,15 @@ export const config: Config = {
   upgradeCostMult: 0.9,
 
   rockDensity: 0.06,
+
+  climbSpeedMult: 0.4,
+  wallCostClimb: 25,
+  bombTime: 2.5,
+  frustrationToBomb: 12,
+
+  levelUpEvery: 5,
+  levelUpDiscount: 0.85,
+  levelUpBuff: 1.25,
 };
 
 // View toggles (not part of the tuning model, but live).
@@ -113,6 +133,7 @@ export const view = {
   showPath: true,
   paused: false,
   collapseWrecksTowers: true, // a tile collapsing destroys towers on adjacent tiles
+  enemyAdaptation: true, // creeps learn to climb/bomb walls (the arms race)
 };
 
 // --- Tower types -------------------------------------------------------------
@@ -216,12 +237,13 @@ export interface EnemyDef {
   pressureMult: number; // movement-pressure contribution multiplier
   color: string;
   radius: number; // fraction of a tile
+  bomber?: boolean; // once the swarm learns to bomb, this type destroys walls (others climb)
 }
 
 export const ENEMY_DEFS: Record<EnemyKind, EnemyDef> = {
   runner: { name: 'Runner', hpMult: 0.5, speedMult: 1.7, reward: 6, pressureMult: 0.8, color: '#f0c43e', radius: 0.2 },
   grunt: { name: 'Grunt', hpMult: 1.0, speedMult: 1.0, reward: 8, pressureMult: 1.0, color: '#f0883e', radius: 0.26 },
-  brute: { name: 'Brute', hpMult: 3.2, speedMult: 0.62, reward: 18, pressureMult: 1.7, color: '#d9533b', radius: 0.34 },
+  brute: { name: 'Brute', hpMult: 3.2, speedMult: 0.62, reward: 18, pressureMult: 1.7, color: '#d9533b', radius: 0.34, bomber: true },
 };
 
 // Slider metadata: [key, label, min, max, step]
@@ -251,4 +273,8 @@ export const sliders: [keyof Config, string, number, number, number][] = [
   ['spawnBuffer', 'No-build radius', 0, 5, 1],
   ['killRewardMult', 'Reward x', 0, 2, 0.05],
   ['towerCostGrowth', 'Cost growth', 0, 0.5, 0.01],
+  ['climbSpeedMult', 'Climb speed x', 0.1, 1, 0.05],
+  ['frustrationToBomb', 'Bomb after', 1, 40, 1],
+  ['levelUpBuff', 'LvlUp buff x', 1, 2, 0.05],
+  ['levelUpDiscount', 'LvlUp cost x', 0.5, 1, 0.05],
 ];

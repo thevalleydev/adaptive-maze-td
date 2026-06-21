@@ -11,7 +11,10 @@ export function buildPanel(panel: HTMLElement, game: Game) {
 
   panel.innerHTML = `
     <h1>Adaptive Maze TD</h1>
-    <div class="hint">Left-click empty: build &middot; left-click your tower: <b>upgrade</b> &middot; right-click: sell &middot; keys 1-4</div>
+    <div class="hint">Left-click empty: build &middot; left-click your tower: <b>upgrade</b> &middot; right-click: sell &middot; keys 1-5</div>
+
+    <div class="toggle-row"><button id="start-btn">▶ Start</button></div>
+    <div id="levelup"></div>
 
     <h2>Seed</h2>
     <div class="row seed-row">
@@ -35,6 +38,7 @@ export function buildPanel(panel: HTMLElement, game: Game) {
       <label><input type="checkbox" id="t-heat" checked> heatmap</label>
       <label><input type="checkbox" id="t-path" checked> path</label>
       <label><input type="checkbox" id="t-wreck" checked> collapse wrecks towers</label>
+      <label><input type="checkbox" id="t-adapt" checked> creeps adapt</label>
       <label><input type="checkbox" id="t-pause"> pause</label>
     </div>
 
@@ -47,6 +51,9 @@ export function buildPanel(panel: HTMLElement, game: Game) {
   const descEl = panel.querySelector('#tower-desc')!;
   const towerBtns = Array.from(panel.querySelectorAll<HTMLButtonElement>('.tower-btn'));
   const seedIn = panel.querySelector('#seed-in') as HTMLInputElement;
+  const startBtn = panel.querySelector('#start-btn') as HTMLButtonElement;
+  const levelupEl = panel.querySelector('#levelup')!;
+  startBtn.addEventListener('click', () => game.start());
 
   for (const btn of towerBtns) {
     btn.addEventListener('click', () => {
@@ -86,10 +93,36 @@ export function buildPanel(panel: HTMLElement, game: Game) {
   bindToggle(panel, '#t-heat', (v) => (view.showHeatmap = v));
   bindToggle(panel, '#t-path', (v) => (view.showPath = v));
   bindToggle(panel, '#t-wreck', (v) => (view.collapseWrecksTowers = v));
+  bindToggle(panel, '#t-adapt', (v) => (view.enemyAdaptation = v));
   bindToggle(panel, '#t-pause', (v) => (view.paused = v));
+
+  let levelUpRendered = -1; // rebuild option buttons only when they change
 
   return () => {
     const money = game.money;
+
+    // Start button (prep only).
+    startBtn.style.display = game.started ? 'none' : 'block';
+
+    // Level-up offer.
+    if (game.awaitingLevelUp) {
+      const sig = game.levelUpOptions.map((o) => o.label).join('|');
+      if (sig !== String(levelUpRendered)) {
+        levelUpRendered = sig as unknown as number;
+        levelupEl.innerHTML =
+          `<div class="hint" style="color:#f0c43e">★ LEVEL UP — choose one:</div>` +
+          game.levelUpOptions
+            .map((o, i) => `<button class="lvl-btn" data-i="${i}">${o.label}</button>`)
+            .join('');
+        for (const b of Array.from(levelupEl.querySelectorAll<HTMLButtonElement>('.lvl-btn'))) {
+          b.addEventListener('click', () => game.chooseLevelUp(Number(b.dataset.i)));
+        }
+      }
+    } else if (levelUpRendered !== -1) {
+      levelupEl.innerHTML = '';
+      levelUpRendered = -1;
+    }
+
     // Per-tower live cost + affordability + selection.
     for (const btn of towerBtns) {
       const kind = btn.dataset.kind as keyof typeof TOWER_DEFS;
@@ -104,6 +137,13 @@ export function buildPanel(panel: HTMLElement, game: Game) {
 
     syncSeedInput();
 
+    const ev = game.evolution;
+    const creeps = ev.bomb
+      ? 'CLIMB + BOMB'
+      : ev.climb
+        ? `climb · frustration ${ev.frustration}/${config.frustrationToBomb}`
+        : 'naive';
+
     statsEl.textContent =
       `seed     ${game.seed === null ? '—' : seedToCode(game.seed)}\n` +
       `wave     ${game.wave}${game.waveActive ? ' (active)' : ''}\n` +
@@ -112,6 +152,7 @@ export function buildPanel(panel: HTMLElement, game: Game) {
       `kills    ${game.kills}\n` +
       `leaks    ${game.leaks}\n` +
       `towers   ${game.towers.length}\n` +
+      `creeps   ${creeps}\n` +
       `fps      ${game.fps.toFixed(0)}`;
   };
 }

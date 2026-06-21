@@ -1,14 +1,15 @@
-import { Grid, Tile, isWall } from './grid';
+import { Grid, Tile } from './grid';
 
 export interface Pt {
   x: number;
   y: number;
 }
 
-// 4-directional A* over the grid. Truly-blocked tiles (towers/walls) are
-// impassable; everything else uses Grid.enterCost (so rubble is just expensive).
-// Returns a list of tile centers from start to goal, or null if unreachable.
-export function findPath(grid: Grid, start: Pt, goal: Pt): Pt[] | null {
+// 4-directional A* over the grid. Rock is always impassable. Towers/walls are
+// impassable when wallCost === Infinity (default — naive creeps), else passable
+// at that extra cost (creeps that have learned to climb/bomb). Other tiles use
+// Grid.enterCost (rubble is just expensive). Returns tile centers, or null.
+export function findPath(grid: Grid, start: Pt, goal: Pt, wallCost = Infinity): Pt[] | null {
   const startT = grid.at(start.x, start.y);
   const goalT = grid.at(goal.x, goal.y);
   if (!startT || !goalT) return null;
@@ -79,10 +80,12 @@ export function findPath(grid: Grid, start: Pt, goal: Pt): Pt[] | null {
       const nx = cx + dx;
       const ny = cy + dy;
       const nt: Tile | null = grid.at(nx, ny);
-      if (!nt || isWall(nt)) continue;
+      if (!nt || nt.rock) continue; // rock never passable
+      const structure = nt.blocked; // tower/wall
+      if (structure && wallCost === Infinity) continue;
       const ni = grid.idx(nx, ny);
       if (closed[ni]) continue;
-      const tentative = gScore[cur] + grid.enterCost(nt);
+      const tentative = gScore[cur] + grid.enterCost(nt) + (structure ? wallCost : 0);
       if (tentative < gScore[ni]) {
         cameFrom[ni] = cur;
         gScore[ni] = tentative;

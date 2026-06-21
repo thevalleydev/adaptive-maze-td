@@ -3,12 +3,22 @@
 Chronological log of playtest feedback and decisions. Newest first.
 
 ## Status
-- ✅ **Phase 1 (foundation)**: fixed-timestep loop + seeded map generation (spawn/exit +
-  rock obstacles) + seed in URL + New/Replay/seed-input controls.
-- ✅ **Phase 2**: tower **upgrades** (click own tower; per-level +dmg/+rate/+range) and the
-  **Vent** tower (key 4 — drains nearby pressure, the counter to collapse).
+- ✅ Foundation: fixed-timestep loop + seeded map generation (spawn/exit + rock obstacles)
+  + seed in URL + New/Replay/seed-input controls.
+- ✅ Tower **upgrades** (click own tower) and the **Vent** tower (key 4). **Walls** (key 5,
+  cheap blockers; collapse hits them at 2× a tower's radius).
 - ✅ UX: tower buttons show live per-type cost and grey out when unaffordable.
-- ⬜ Next: run **stats** screen → **action replay** (seed + input log) → unlocks → daily/leaderboards.
+- ✅ **Co-evolution Pass 1**: Start/prep button; the "can't block path" rule is GONE; creeps
+  **learn to climb** when you seal the path, then **escalate to bombing** (Brutes) when you
+  slaughter climbers (frustration counter); **level-ups every 5 waves** (cheaper vs stronger
+  tower). Headless-verified via a `seal` sim policy (climb✓ bomb✓ walls bombed✓, no softlock).
+- ⬜ **Co-evolution Pass 2**: damage types + creep **armor** evolution (counter to mono-tower).
+- ⬜ **Co-evolution Pass 3**: persistence — save slots + reset so learned abilities stick.
+- ⬜ **Deferred polish task (per user)**: sound effects (synthesized, muteable), more inviting
+  visuals, and more **distinguishable tower silhouettes** (color-only is hard to read). Do
+  after the evolution work feels right.
+- ⬜ Later: run **stats** screen → **action replay** (seed + input log) → player unlocks →
+  daily/leaderboards.
 
 ## Retention: why no urge to beat the high score? (KEY ISSUE)
 Player reached wave 30 with no pull to replay. Root cause: every run is

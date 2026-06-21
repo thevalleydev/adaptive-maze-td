@@ -16,6 +16,8 @@ export interface Metrics {
   finalMoney: number;
   interventions: number; // reactive relocations the policy performed
   cracksPersisted: boolean; // did a crack ever survive into a between-wave breather?
+  learnedClimb: boolean; // did the swarm learn to climb (was it forced)?
+  learnedBomb: boolean; // did it escalate to bombing?
 }
 
 // Run one headless game under a policy until win / loss / time cap.
@@ -25,6 +27,7 @@ export function runGame(policy: Policy, opts: { dt?: number; maxSeconds?: number
 
   const world = new World();
   policy.onStart(world);
+  world.start(); // leave the prep phase so waves run
 
   let firstLeakWave: number | null = null;
   let prevLeaks = 0;
@@ -38,6 +41,7 @@ export function runGame(policy: Policy, opts: { dt?: number; maxSeconds?: number
   // For measurement we stop at the target milestone (success) or death. The
   // browser game keeps playing past the target; the sim only cares if it got there.
   while (!world.gameOver && !world.reachedTarget && steps < maxSteps) {
+    if (world.awaitingLevelUp) world.chooseLevelUp(0); // headless: take the first offer
     policy.onTick(world, dt);
 
     // Snapshot tower positions AFTER the policy acts; anything missing after the
@@ -81,5 +85,7 @@ export function runGame(policy: Policy, opts: { dt?: number; maxSeconds?: number
     finalMoney: Math.floor(world.money),
     interventions: policy.sells,
     cracksPersisted,
+    learnedClimb: world.evolution.climb,
+    learnedBomb: world.evolution.bomb,
   };
 }

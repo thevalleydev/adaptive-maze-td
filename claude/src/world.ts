@@ -1,4 +1,4 @@
-import { config, view, TowerKind, TOWER_DEFS, EnemyKind, ENEMY_DEFS } from './config';
+import { config, view, TowerKind, TOWER_DEFS, TOWER_ORDER, EnemyKind, ENEMY_DEFS } from './config';
 import { Grid, COLS, ROWS } from './grid';
 import { findPath, Pt } from './astar';
 import { Enemy, Tower, ShotLine } from './entities';
@@ -6,6 +6,18 @@ import { RNG } from './rng';
 
 export interface Shot extends ShotLine {
   ttl: number;
+}
+
+export interface LevelUpOption {
+  kind: 'cheaper' | 'stronger';
+  tower: TowerKind;
+  label: string;
+}
+
+function makeMods(): Record<TowerKind, number> {
+  const m = {} as Record<TowerKind, number>;
+  for (const k of TOWER_ORDER) m[k] = 1;
+  return m;
 }
 
 // The entire simulation — state + update logic, with NO rendering or DOM/input.
@@ -31,6 +43,19 @@ export class World {
   lives = 12;
   gameOver = false;
   reachedTarget = false; // crossed targetWave — milestone, not an end; play continues
+
+  started = false; // prep phase until the player hits Start
+
+  // --- Creep evolution (arms race) ---
+  evolution = { climb: false, bomb: false, frustration: 0 };
+  justLearned: 'climb' | 'bomb' | null = null; // set the frame an ability is learned (UI banner)
+
+  // --- Player level-ups (per-run roguelite mods) ---
+  statMod: Record<TowerKind, number> = makeMods(); // damage multiplier per tower kind
+  costMod: Record<TowerKind, number> = makeMods(); // cost multiplier per tower kind
+  levelUpsTaken = 0;
+  awaitingLevelUp = false;
+  levelUpOptions: LevelUpOption[] = [];
 
   previewPath: Pt[] | null = null;
   previewVersion = -1;
@@ -109,22 +134,19 @@ export class World {
   // must be earned rather than spammed once the economy snowballs.
   towerCost(kind: TowerKind): number {
     const def = TOWER_DEFS[kind];
-    if (def.structural) return def.cost; // walls: flat, cheap, spammable for shaping
+    const mod = this.costMod[kind] ?? 1;
+    if (def.structural) return Math.max(1, Math.round(def.cost * mod)); // walls: flat, spammable
     const owned = this.towers.reduce((n, t) => n + (t.kind === kind ? 1 : 0), 0);
-    return Math.round(def.cost * (1 + config.towerCostGrowth * owned));
+    return Math.max(1, Math.round(def.cost * (1 + config.towerCostGrowth * owned) * mod));
   }
 
   tryPlaceTower(x: number, y: number, kind: TowerKind): boolean {
     if (!this.canBuildOn(x, y)) return false;
     const cost = this.towerCost(kind);
     if (this.money < cost) return false;
-
-    // Tentatively block, verify a path still exists (towers form the maze).
+    // No path-existence check: you MAY seal the path. The creeps will adapt
+    // (learn to climb, then bomb) — see the evolution logic in update().
     this.grid.setBlocked(x, y, true);
-    if (!findPath(this.grid, this.grid.spawn, this.grid.exit)) {
-      this.grid.setBlocked(x, y, false);
-      return false;
-    }
     this.towers.push(new Tower(x, y, kind));
     this.money -= cost;
     return true;
@@ -147,6 +169,61 @@ export class World {
     this.money += Math.floor(TOWER_DEFS[this.towers[i].kind].cost * 0.5);
     this.towers.splice(i, 1);
     this.grid.setBlocked(x, y, false);
+  }
+
+  // --- Prep / Start ---------------------------------------------------------
+  start() {
+    if (!this.started) {
+      this.started = true;
+      this.betweenTimer = 1; // brief "get ready" before wave 1
+    }
+  }
+
+  // --- Creep evolution ------------------------------------------------------
+  effectiveWallCost(): number {
+    if (!view.enemyAdaptation) return Infinity;
+    return this.evolution.climb ? config.wallCostClimb : Infinity;
+  }
+  private learnClimb() {
+    if (!this.evolution.climb) {
+      this.evolution.climb = true;
+      this.justLearned = 'climb';
+    }
+  }
+  private learnBomb() {
+    if (!this.evolution.bomb) {
+      this.evolution.bomb = true;
+      this.justLearned = 'bomb';
+    }
+  }
+  private bombStructure(x: number, y: number) {
+    const i = this.towers.findIndex((t) => t.x === x && t.y === y);
+    if (i !== -1) this.towers.splice(i, 1); // bombed = no salvage; defend it or lose it
+    this.grid.setBlocked(x, y, false);
+  }
+
+  // --- Player level-ups -----------------------------------------------------
+  private grantLevelUp() {
+    this.awaitingLevelUp = true;
+    const rng = new RNG((this.seed ?? 1) ^ ((this.levelUpsTaken + 1) * 0x9e3779b1));
+    const pool: LevelUpOption[] = [];
+    for (const k of ['gun', 'frost', 'cannon'] as TowerKind[]) {
+      pool.push({ kind: 'stronger', tower: k, label: `+${Math.round((config.levelUpBuff - 1) * 100)}% ${TOWER_DEFS[k].name} dmg` });
+      pool.push({ kind: 'cheaper', tower: k, label: `−${Math.round((1 - config.levelUpDiscount) * 100)}% ${TOWER_DEFS[k].name} cost` });
+    }
+    const opts: LevelUpOption[] = [];
+    while (opts.length < 3 && pool.length) opts.push(pool.splice(rng.int(pool.length), 1)[0]);
+    this.levelUpOptions = opts;
+  }
+
+  chooseLevelUp(i: number) {
+    const o = this.levelUpOptions[i];
+    if (!o) return;
+    if (o.kind === 'stronger') this.statMod[o.tower] *= config.levelUpBuff;
+    else this.costMod[o.tower] *= config.levelUpDiscount;
+    this.levelUpsTaken++;
+    this.awaitingLevelUp = false;
+    this.levelUpOptions = [];
   }
 
   // --- Wave control ---------------------------------------------------------
@@ -186,13 +263,36 @@ export class World {
     this.lives = 12;
     this.gameOver = false;
     this.reachedTarget = false;
+    this.started = false;
+    this.evolution = { climb: false, bomb: false, frustration: 0 };
+    this.justLearned = null;
+    this.statMod = makeMods();
+    this.costMod = makeMods();
+    this.levelUpsTaken = 0;
+    this.awaitingLevelUp = false;
+    this.levelUpOptions = [];
     this.previewVersion = -1;
   }
 
   // --- Per-frame simulation -------------------------------------------------
   update(dt: number) {
     if (this.gameOver) return; // only death ends the run; the target is endless beyond
+    this.justLearned = null;
 
+    // Sim only runs once the player hits Start (prep phase before that). Preview
+    // still recomputes below so building during prep updates the route.
+    if (this.started) {
+      this.simStep(dt);
+    }
+
+    // Preview the ground route (Infinity = no climbing); null if fully sealed.
+    if (this.previewVersion !== this.grid.graphVersion) {
+      this.previewPath = findPath(this.grid, this.grid.spawn, this.grid.exit);
+      this.previewVersion = this.grid.graphVersion;
+    }
+  }
+
+  private simStep(dt: number) {
     // Wave state machine.
     if (this.waveActive) {
       if (this.spawnQueue.length > 0) {
@@ -204,24 +304,23 @@ export class World {
           this.enemies.push(new Enemy(this.grid, kind, hp));
         }
       } else if (this.enemies.length === 0) {
-        // Wave cleared: dump the bulk of pressure (the breather cools the map),
-        // flag the target milestone, then ALWAYS queue the next wave — the run
-        // only ends when you die, so you can see how far past the target you get.
+        // Wave cleared: cool the map, flag the milestone, maybe grant a level-up,
+        // then queue the next wave (the run only ends on death).
         this.waveActive = false;
         this.grid.dissipate(config.betweenWaveDecay);
         if (this.wave >= config.targetWave) this.reachedTarget = true;
+        if (this.wave % config.levelUpEvery === 0) this.grantLevelUp();
         this.betweenTimer = config.interWaveTime;
       }
-    } else {
+    } else if (!this.awaitingLevelUp) {
+      // Hold the next wave until the player picks their level-up reward.
       this.betweenTimer -= dt;
       if (this.betweenTimer <= 0) this.startWave();
     }
 
     this.grid.update(dt);
 
-    // A collapse wrecks nearby structures — towers within 1 tile, WALLS within 2
-    // (overbuilding a cheap maze is a false sense of security: a cave-in tears a
-    // wide hole through it). Clustering is punished either way.
+    // A collapse wrecks nearby structures — towers within 1 tile, WALLS within 2.
     if (view.collapseWrecksTowers && this.grid.justCollapsed.length) {
       for (const ct of this.grid.justCollapsed) {
         for (const tw of [...this.towers]) {
@@ -232,10 +331,24 @@ export class World {
       }
     }
 
-    for (const e of this.enemies) e.update(dt, this.grid);
+    // Creep adaptation inputs (only when enabled).
+    const adapt = view.enemyAdaptation;
+    const wallCost = this.effectiveWallCost();
+    const opts = adapt
+      ? { wallCost, bombLearned: this.evolution.bomb, onBlocked: () => this.learnClimb() }
+      : {};
+    for (const e of this.enemies) e.update(dt, this.grid, opts);
+
+    // A finished bomb destroys the structure it targeted (opens a gap).
+    for (const e of this.enemies) {
+      if (e.bombedTile) {
+        this.bombStructure(e.bombedTile.x, e.bombedTile.y);
+        e.bombedTile = null;
+      }
+    }
 
     for (const t of this.towers) {
-      const shot = t.update(dt, this.enemies, this.grid);
+      const shot = t.update(dt, this.enemies, this.grid, this.statMod[t.kind] ?? 1);
       if (shot) this.shots.push({ ...shot, ttl: 0.06 });
     }
 
@@ -245,6 +358,11 @@ export class World {
         this.kills++;
         this.money += ENEMY_DEFS[e.kind].reward * config.killRewardMult;
         this.grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerKill);
+        // Killing forced climbers builds frustration → escalation to bombing.
+        if (adapt && this.evolution.climb && !this.evolution.bomb && e.everClimbed) {
+          this.evolution.frustration++;
+          if (this.evolution.frustration >= config.frustrationToBomb) this.learnBomb();
+        }
       } else if (e.leaked) {
         this.leaks++;
         if (--this.lives <= 0) {
@@ -257,12 +375,6 @@ export class World {
 
     for (const s of this.shots) s.ttl -= dt;
     this.shots = this.shots.filter((s) => s.ttl > 0);
-
-    // Recompute the preview path only when the graph changes.
-    if (this.previewVersion !== this.grid.graphVersion) {
-      this.previewPath = findPath(this.grid, this.grid.spawn, this.grid.exit);
-      this.previewVersion = this.grid.graphVersion;
-    }
   }
 
   // --- Read helpers (used by render + policies) -----------------------------
