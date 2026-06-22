@@ -5,7 +5,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "simulate": "node simulator/run.js",
+    "simulate:bare": "node simulator/run.js --strategy bare",
+    "simulate:wall": "node simulator/run.js --strategy basic-wall",
+    "simulate:maze": "node simulator/run.js --strategy mixed-maze",
+    "simulate:sniper": "node simulator/run.js --strategy sniper-slow",
+    "simulate:greedy": "node simulator/run.js --strategy greedy-maze",
+    "simulate:all": "node simulator/run.js --strategy all"
   },
   "dependencies": {
     "phaser": "^3.88.2"
