@@ -165,8 +165,9 @@ export function buildPanel(panel: HTMLElement, game: Game) {
     syncSeedInput();
 
     const ev = game.evolution;
-    const creeps = ev.bomb
-      ? 'CLIMB + BOMB'
+    const traits = [ev.climb && 'climb', ev.bomb && 'bomb', ev.seek && 'seek', ev.armor && `armor:${ev.armor}`].filter(Boolean);
+    const creeps = traits.length
+      ? traits.join('+')
       : ev.climb
         ? `climb · frustration ${ev.frustration}/${config.frustrationToBomb}`
         : 'naive';

@@ -1,3 +1,4 @@
+import { config } from './config';
 import { Grid, Tile } from './grid';
 
 export interface Pt {
@@ -7,9 +8,13 @@ export interface Pt {
 
 // 4-directional A* over the grid. Rock is always impassable. Towers/walls are
 // impassable when wallCost === Infinity (default — naive creeps), else passable
-// at that extra cost (creeps that have learned to climb/bomb). Other tiles use
-// Grid.enterCost (rubble is just expensive). Returns tile centers, or null.
-export function findPath(grid: Grid, start: Pt, goal: Pt, wallCost = Infinity): Pt[] | null {
+// at that extra cost (creeps that have learned to climb/bomb).
+//
+// pressureBias scales how pressure affects cost: positive (default) makes hot
+// tiles EXPENSIVE so creeps route around them; negative makes them CHEAP so
+// crack-seeking creeps are drawn toward soon-to-collapse ground. Returns tile
+// centers, or null.
+export function findPath(grid: Grid, start: Pt, goal: Pt, wallCost = Infinity, pressureBias = config.pressureAvoidance): Pt[] | null {
   const startT = grid.at(start.x, start.y);
   const goalT = grid.at(goal.x, goal.y);
   if (!startT || !goalT) return null;
@@ -85,7 +90,11 @@ export function findPath(grid: Grid, start: Pt, goal: Pt, wallCost = Infinity): 
       if (structure && wallCost === Infinity) continue;
       const ni = grid.idx(nx, ny);
       if (closed[ni]) continue;
-      const tentative = gScore[cur] + grid.enterCost(nt) + (structure ? wallCost : 0);
+      // Step cost = terrain + (wall crossing) + pressure bias. Clamp ≥ 0.05 so a
+      // strong negative bias never produces negative edges (A* needs non-negative).
+      let step = grid.enterCost(nt) + (structure ? wallCost : 0) + pressureBias * (nt.pressure / config.collapseThreshold);
+      if (step < 0.05) step = 0.05;
+      const tentative = gScore[cur] + step;
       if (tentative < gScore[ni]) {
         cameFrom[ni] = cur;
         gScore[ni] = tentative;

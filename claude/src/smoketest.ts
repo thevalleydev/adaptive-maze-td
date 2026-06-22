@@ -153,4 +153,20 @@ console.log(
   JSON.stringify({ initialTowers, towersWrecked: wrecked, towersRemaining: towers.length }, null, 2),
 );
 if (wrecked === 0) throw new Error('FAIL: a crammed killbox never self-destructed');
-console.log('SCENARIO 2 (crowding self-destructs) PASSED');
+console.log('SCENARIO 2 (crowding self-destructs) PASSED\n');
+
+// --- Scenario 3: crack-seeking pathfinding -------------------------------------
+// On an open grid, make one tile on the straight line very hot. A normal creep
+// (positive pressure bias) should route AROUND it; a crack-seeker (negative bias)
+// should route THROUGH it.
+const g3 = new Grid();
+const row = g3.spawn.y;
+const midX = Math.floor(g3.cols / 2);
+g3.at(midX, row)!.pressure = config.collapseThreshold; // max heat on the lane
+const through = (p: { x: number; y: number }[] | null) => !!p && p.some((t) => t.x === midX && t.y === row);
+const avoidPath = findPath(g3, g3.spawn, g3.exit, Infinity, config.pressureAvoidance);
+const seekPath = findPath(g3, g3.spawn, g3.exit, Infinity, -config.crackLure);
+console.log(JSON.stringify({ avoidThroughHot: through(avoidPath), seekThroughHot: through(seekPath) }));
+if (through(avoidPath)) throw new Error('FAIL: normal creep walked through the hot tile');
+if (!through(seekPath)) throw new Error('FAIL: crack-seeker did not steer into the hot tile');
+console.log('SCENARIO 3 (crack-seeking pathfinding) PASSED');

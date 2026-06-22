@@ -48,8 +48,9 @@ export class World {
   started = false; // prep phase until the player hits Start
 
   // --- Creep evolution (arms race) ---
-  evolution = { climb: false, bomb: false, frustration: 0, armor: null as DamageType | null };
-  justLearned: 'climb' | 'bomb' | 'armor' | null = null; // set the frame an ability is learned (UI banner)
+  evolution = { climb: false, bomb: false, frustration: 0, armor: null as DamageType | null, seek: false };
+  justLearned: 'climb' | 'bomb' | 'armor' | 'seek' | null = null; // set the frame an ability is learned (UI banner)
+  collapseExposure = 0; // collapses the player has caused — drives crack-seeking
   // Damage dealt per type since the last armor adaptation. When one type both
   // crosses the threshold AND dominates, the swarm hardens against it; the tally
   // then resets so the next over-reliance is measured fresh.
@@ -189,6 +190,16 @@ export class World {
     if (!view.enemyAdaptation) return Infinity;
     return this.evolution.climb ? config.wallCostClimb : Infinity;
   }
+  // Positive = avoid hot tiles (default); negative = SEEK them (crack-seeking).
+  effectivePressureBias(): number {
+    return this.evolution.seek ? -config.crackLure : config.pressureAvoidance;
+  }
+  private learnSeek() {
+    if (!this.evolution.seek) {
+      this.evolution.seek = true;
+      this.justLearned = 'seek';
+    }
+  }
   private learnClimb() {
     if (!this.evolution.climb) {
       this.evolution.climb = true;
@@ -291,8 +302,9 @@ export class World {
     this.gameOver = false;
     this.reachedTarget = false;
     this.started = false;
-    this.evolution = { climb: false, bomb: false, frustration: 0, armor: null };
+    this.evolution = { climb: false, bomb: false, frustration: 0, armor: null, seek: false };
     this.justLearned = null;
+    this.collapseExposure = 0;
     this.dmgByType = { kinetic: 0, blast: 0, frost: 0 };
     this.statMod = makeMods();
     this.costMod = makeMods();
@@ -349,6 +361,8 @@ export class World {
 
     this.grid.update(dt);
 
+    const adapt = view.enemyAdaptation;
+
     // A collapse wrecks nearby structures — towers within 1 tile, WALLS within 2.
     if (view.collapseWrecksTowers && this.grid.justCollapsed.length) {
       for (const ct of this.grid.justCollapsed) {
@@ -360,11 +374,17 @@ export class World {
       }
     }
 
+    // The more the player leans on collapses, the more the swarm learns to
+    // weaponize them — seeking cracking ground to cave in your killbox.
+    if (this.grid.justCollapsed.length) {
+      this.collapseExposure += this.grid.justCollapsed.length;
+      if (adapt && !this.evolution.seek && this.collapseExposure >= config.seekAfterCollapses) this.learnSeek();
+    }
+
     // Creep adaptation inputs (only when enabled).
-    const adapt = view.enemyAdaptation;
     const wallCost = this.effectiveWallCost();
     const opts = adapt
-      ? { wallCost, bombLearned: this.evolution.bomb, onBlocked: () => this.learnClimb() }
+      ? { wallCost, bombLearned: this.evolution.bomb, pressureBias: this.effectivePressureBias(), onBlocked: () => this.learnClimb() }
       : {};
     for (const e of this.enemies) e.update(dt, this.grid, opts);
 

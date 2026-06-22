@@ -132,7 +132,9 @@ export class Game {
           ? 'THE SWARM LEARNED TO CLIMB'
           : jl === 'bomb'
             ? 'THE SWARM LEARNED TO BOMB'
-            : `THE SWARM HARDENED VS ${(DAMAGE_TYPE_LABEL[this.world.evolution.armor ?? 'kinetic']).toUpperCase()}`;
+            : jl === 'seek'
+              ? 'THE SWARM LEARNED TO EXPLOIT CRACKS'
+              : `THE SWARM HARDENED VS ${(DAMAGE_TYPE_LABEL[this.world.evolution.armor ?? 'kinetic']).toUpperCase()}`;
       this.learnTimer = 3.5;
     }
     if (this.learnTimer > 0) this.learnTimer -= dt;

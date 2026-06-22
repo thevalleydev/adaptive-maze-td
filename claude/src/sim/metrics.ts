@@ -20,6 +20,7 @@ export interface Metrics {
   learnedBomb: boolean; // did it escalate to bombing?
   learnedArmor: boolean; // did the swarm harden against a damage type (mono-tower)?
   armorType: DamageType | null; // which type it hardened against (null if none)
+  learnedSeek: boolean; // did the swarm learn to seek/exploit cracks?
 }
 
 // Run one headless game under a policy until win / loss / time cap.
@@ -91,5 +92,6 @@ export function runGame(policy: Policy, opts: { dt?: number; maxSeconds?: number
     learnedBomb: world.evolution.bomb,
     learnedArmor: world.evolution.armor !== null,
     armorType: world.evolution.armor,
+    learnedSeek: world.evolution.seek,
   };
 }
