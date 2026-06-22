@@ -190,7 +190,7 @@ const timeToCollapse = (rate: number): number => {
   for (let f = 0; f < 60 * 30; f++) {
     g4.addPressure(t.x, t.y, rate * dt);
     g4.update(dt);
-    if (t.state === 'collapsed') return f * dt;
+    if ((t.state as string) === 'collapsed') return f * dt;
   }
   return Infinity;
 };
