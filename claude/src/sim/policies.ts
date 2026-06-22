@@ -1,5 +1,5 @@
 import { World } from '../world';
-import { TowerKind } from '../config';
+import { TowerKind, TOWER_DEFS } from '../config';
 import { ROWS } from '../grid';
 
 // A policy decides how the "player" acts. onStart runs once before wave 1;
@@ -116,6 +116,62 @@ export class SealPolicy implements Policy {
     for (const y of order) world.tryPlaceTower(12, y, 'gun');
     for (const y of order) world.tryPlaceTower(11, y, 'gun');
   }
+}
+
+// Spams a SINGLE tower kind on cool ground along the open lane and never
+// diversifies — the pure mono-tower build. Used to verify the armor evolution:
+// the swarm should harden against that tower's damage type. (Defaults to gun =
+// kinetic; pass a kind to confirm other types trigger their own armor.)
+export class MonoPolicy implements Policy {
+  name: string;
+  sells = 0;
+  private kind: TowerKind;
+  private timer = 0;
+
+  constructor(kind: TowerKind = 'gun') {
+    this.kind = kind;
+    this.name = `mono:${kind}`;
+  }
+
+  onStart() {}
+
+  onTick(world: World, dt: number) {
+    this.timer -= dt;
+    if (this.timer > 0) return;
+    this.timer = 0.2;
+    let guard = 30;
+    while (world.money > TOWER_DEFS[this.kind].cost && guard-- > 0) {
+      const spot = bestLanePlacement(world);
+      if (!spot || !world.tryPlaceTower(spot.x, spot.y, this.kind)) break;
+    }
+  }
+}
+
+// Pick the coolest buildable tile adjacent to the current preview path — shared
+// by the mono and reactive policies.
+function bestLanePlacement(world: World): { x: number; y: number } | null {
+  const path = world.previewPath;
+  if (!path) return null;
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  for (const p of path) {
+    for (const [dx, dy] of [
+      [0, 1],
+      [0, -1],
+      [1, 0],
+      [-1, 0],
+    ]) {
+      const x = p.x + dx;
+      const y = p.y + dy;
+      if (!world.canBuildOn(x, y)) continue;
+      const score = 100 - world.maxNeighborPressure(x, y);
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
 }
 
 // Actively adapts: relocate any tower about to be wrecked, and keep the current

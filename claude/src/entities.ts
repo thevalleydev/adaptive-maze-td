@@ -1,4 +1,4 @@
-import { config, EnemyKind, ENEMY_DEFS, TowerKind, TOWER_DEFS } from './config';
+import { config, DamageType, EnemyKind, ENEMY_DEFS, TowerKind, TOWER_DEFS } from './config';
 import { Grid } from './grid';
 import { findPath, Pt } from './astar';
 
@@ -19,6 +19,7 @@ export class Enemy {
   slowTimer = 0;
   dead = false;
   leaked = false;
+  armorType: DamageType | null = null; // hardened vs this damage type (set at spawn)
 
   // --- Adaptation state ---
   blocked = false; // no route at current ability (player sealed the path) — idles
@@ -29,12 +30,13 @@ export class Enemy {
   bombTarget: Pt | null = null;
   bombedTile: Pt | null = null; // set when a bomb completes; World destroys & clears it
 
-  constructor(grid: Grid, kind: EnemyKind, hp: number) {
+  constructor(grid: Grid, kind: EnemyKind, hp: number, armorType: DamageType | null = null) {
     this.kind = kind;
     this.x = grid.spawn.x;
     this.y = grid.spawn.y;
     this.maxHp = hp;
     this.hp = hp;
+    this.armorType = armorType;
     // Stagger so the whole pack doesn't re-path on the same frame.
     this.repathTimer = 0.6 + (this.id % 7) * 0.12;
   }
@@ -202,7 +204,7 @@ export class Tower {
     return m;
   }
 
-  update(dt: number, enemies: Enemy[], grid: Grid, dmgMul = 1): ShotLine | null {
+  update(dt: number, enemies: Enemy[], grid: Grid, dmgMul = 1, tally?: Partial<Record<DamageType, number>>): ShotLine | null {
     const def = this.def;
 
     // Vent tower: drain pressure from a SQUARE area (binary — every tile in the
@@ -247,12 +249,18 @@ export class Tower {
     if (!target || this.cooldown > 0) return null;
     this.cooldown = 1 / effRate;
 
-    const dmg = this.damage * dmgMul;
+    const dmg = this.damage * dmgMul; // output before any enemy armor
+    const type = def.damageType;
     const hit = (e: Enemy) => {
-      e.hp -= dmg;
-      grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerDamage * dmg);
+      // Armor negates a fraction of this type's damage; the ground only feels
+      // what actually lands. The tally records OUTPUT (pre-armor), so leaning on
+      // one type keeps it "dominant" even once the swarm has hardened to it.
+      const applied = type && e.armorType === type ? dmg * (1 - config.armorResist) : dmg;
+      e.hp -= applied;
+      grid.addPressure(Math.round(e.x), Math.round(e.y), config.pressurePerDamage * applied);
       if (def.slowAmount && def.slowDuration) e.applySlow(def.slowAmount, def.slowDuration);
       if (e.hp <= 0) e.dead = true;
+      if (type && tally) tally[type] = (tally[type] ?? 0) + dmg;
     };
 
     hit(target);

@@ -1,7 +1,15 @@
-import { config, view, TowerKind, TOWER_DEFS, TOWER_ORDER, ENEMY_DEFS } from './config';
+import { config, view, TowerKind, TOWER_DEFS, TOWER_ORDER, ENEMY_DEFS, DamageType, DAMAGE_TYPE_LABEL } from './config';
 import { TILE, COLS, ROWS } from './grid';
 import { Pt } from './astar';
 import { World } from './world';
+
+// Armor ring colours — matched to the tower whose damage type they resist, so a
+// hardened creep visibly "reads" as immune to that colour of fire.
+const ARMOR_COLOR: Record<DamageType, string> = {
+  kinetic: '#1f6feb', // vs Gun
+  blast: '#d29922', // vs Cannon
+  frost: '#3fd6ff', // vs Frost
+};
 
 // Thin presentation layer: owns a World (all simulation lives there), draws it,
 // and forwards mouse/keyboard input. No game logic here — see world.ts.
@@ -109,7 +117,13 @@ export class Game {
     if (view.paused) return;
     this.world.update(dt);
     if (this.world.justLearned) {
-      this.learnBanner = this.world.justLearned === 'climb' ? 'THE SWARM LEARNED TO CLIMB' : 'THE SWARM LEARNED TO BOMB';
+      const jl = this.world.justLearned;
+      this.learnBanner =
+        jl === 'climb'
+          ? 'THE SWARM LEARNED TO CLIMB'
+          : jl === 'bomb'
+            ? 'THE SWARM LEARNED TO BOMB'
+            : `THE SWARM HARDENED VS ${(DAMAGE_TYPE_LABEL[this.world.evolution.armor ?? 'kinetic']).toUpperCase()}`;
       this.learnTimer = 3.5;
     }
     if (this.learnTimer > 0) this.learnTimer -= dt;
@@ -299,6 +313,25 @@ export class Game {
         ctx.beginPath();
         ctx.arc(cx, cy, TILE * 0.4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
         ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+      if (e.armorType) {
+        // Hardened plating: a heavy ring in the resisted type's colour, with
+        // short radial "plates" so it reads as armour, not another status glow.
+        const col = ARMOR_COLOR[e.armorType];
+        const r = TILE * (def.radius + 0.16);
+        ctx.strokeStyle = col;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.stroke();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+          ctx.lineTo(cx + Math.cos(a) * (r + TILE * 0.07), cy + Math.sin(a) * (r + TILE * 0.07));
+          ctx.stroke();
+        }
         ctx.lineWidth = 1;
       }
       const w = TILE * 0.6;

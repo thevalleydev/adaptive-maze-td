@@ -12,7 +12,12 @@ Chronological log of playtest feedback and decisions. Newest first.
   **learn to climb** when you seal the path, then **escalate to bombing** (Brutes) when you
   slaughter climbers (frustration counter); **level-ups every 5 waves** (cheaper vs stronger
   tower). Headless-verified via a `seal` sim policy (climb✓ bomb✓ walls bombed✓, no softlock).
-- ⬜ **Co-evolution Pass 2**: damage types + creep **armor** evolution (counter to mono-tower).
+- ✅ **Co-evolution Pass 2**: damage types (Gun→kinetic, Cannon→blast, Frost→frost) + creep
+  **armor** evolution — the counter to mono-tower spam. Pour enough of ONE type into the swarm
+  (≥`armorDamageThreshold`) while it dominates your output (≥`armorDominance`) and newly-spawned
+  creeps harden against it (`armorResist` negates that type). Diversify → no type dominates → no
+  armor; pivot to a new mono-tower → armor switches (whack-a-mole). Headless-verified via the
+  `mono` sim policy (gun→kinetic✓, cannon→blast✓; frost alone can't reach the damage threshold).
 - ⬜ **Co-evolution Pass 3**: persistence — save slots + reset so learned abilities stick.
 - ⬜ **Deferred polish task (per user)**: sound effects (synthesized, muteable), more inviting
   visuals, and more **distinguishable tower silhouettes** (color-only is hard to read). Do

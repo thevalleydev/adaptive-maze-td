@@ -1,4 +1,4 @@
-import { config, view, TowerKind, TOWER_DEFS, TOWER_ORDER, EnemyKind, ENEMY_DEFS } from './config';
+import { config, view, TowerKind, TOWER_DEFS, TOWER_ORDER, EnemyKind, ENEMY_DEFS, DamageType, DAMAGE_TYPES } from './config';
 import { Grid, COLS, ROWS } from './grid';
 import { findPath, Pt } from './astar';
 import { Enemy, Tower, ShotLine } from './entities';
@@ -47,8 +47,12 @@ export class World {
   started = false; // prep phase until the player hits Start
 
   // --- Creep evolution (arms race) ---
-  evolution = { climb: false, bomb: false, frustration: 0 };
-  justLearned: 'climb' | 'bomb' | null = null; // set the frame an ability is learned (UI banner)
+  evolution = { climb: false, bomb: false, frustration: 0, armor: null as DamageType | null };
+  justLearned: 'climb' | 'bomb' | 'armor' | null = null; // set the frame an ability is learned (UI banner)
+  // Damage dealt per type since the last armor adaptation. When one type both
+  // crosses the threshold AND dominates, the swarm hardens against it; the tally
+  // then resets so the next over-reliance is measured fresh.
+  private dmgByType: Record<DamageType, number> = { kinetic: 0, blast: 0, frost: 0 };
 
   // --- Player level-ups (per-run roguelite mods) ---
   statMod: Record<TowerKind, number> = makeMods(); // damage multiplier per tower kind
@@ -202,6 +206,27 @@ export class World {
     this.grid.setBlocked(x, y, false);
   }
 
+  // Mono-tower counter: once you've poured enough of ONE damage type into the
+  // swarm and it dominates your output, the swarm hardens against that type.
+  // Spreading damage across types keeps any one below the dominance line — so
+  // a diverse defense never triggers it, and pivoting to a new mono-tower just
+  // moves the armor. Re-measures from zero after each adaptation.
+  private maybeEvolveArmor() {
+    let top: DamageType = 'kinetic';
+    let total = 0;
+    for (const t of DAMAGE_TYPES) {
+      total += this.dmgByType[t];
+      if (this.dmgByType[t] > this.dmgByType[top]) top = t;
+    }
+    if (this.dmgByType[top] < config.armorDamageThreshold) return;
+    if (total <= 0 || this.dmgByType[top] / total < config.armorDominance) return;
+    if (this.evolution.armor !== top) {
+      this.evolution.armor = top;
+      this.justLearned = 'armor';
+    }
+    for (const t of DAMAGE_TYPES) this.dmgByType[t] = 0; // re-measure the next over-reliance
+  }
+
   // --- Player level-ups -----------------------------------------------------
   private grantLevelUp() {
     this.awaitingLevelUp = true;
@@ -264,8 +289,9 @@ export class World {
     this.gameOver = false;
     this.reachedTarget = false;
     this.started = false;
-    this.evolution = { climb: false, bomb: false, frustration: 0 };
+    this.evolution = { climb: false, bomb: false, frustration: 0, armor: null };
     this.justLearned = null;
+    this.dmgByType = { kinetic: 0, blast: 0, frost: 0 };
     this.statMod = makeMods();
     this.costMod = makeMods();
     this.levelUpsTaken = 0;
@@ -301,7 +327,8 @@ export class World {
           this.spawnTimer = config.spawnInterval;
           const kind = this.spawnQueue.shift()!;
           const hp = this.currentWaveHp * ENEMY_DEFS[kind].hpMult;
-          this.enemies.push(new Enemy(this.grid, kind, hp));
+          // Hardened creeps inherit the current armor; in-flight creeps keep theirs.
+          this.enemies.push(new Enemy(this.grid, kind, hp, this.evolution.armor));
         }
       } else if (this.enemies.length === 0) {
         // Wave cleared: cool the map, flag the milestone, maybe grant a level-up,
@@ -348,9 +375,10 @@ export class World {
     }
 
     for (const t of this.towers) {
-      const shot = t.update(dt, this.enemies, this.grid, this.statMod[t.kind] ?? 1);
+      const shot = t.update(dt, this.enemies, this.grid, this.statMod[t.kind] ?? 1, this.dmgByType);
       if (shot) this.shots.push({ ...shot, ttl: 0.06 });
     }
+    if (view.enemyAdaptation) this.maybeEvolveArmor();
 
     // Reap.
     for (const e of this.enemies) {

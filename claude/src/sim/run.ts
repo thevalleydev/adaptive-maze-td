@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync } from 'fs';
 import { config } from '../config';
 import { runGame } from './metrics';
-import { StaticPolicy, ReactivePolicy, SealPolicy, LAYOUTS } from './policies';
+import { StaticPolicy, ReactivePolicy, SealPolicy, MonoPolicy, LAYOUTS } from './policies';
 import { runSweep, SweepRow } from './sweep';
 
 const argv = process.argv.slice(2);
@@ -57,17 +57,20 @@ if (has('--sweep')) {
     ? [new ReactivePolicy()]
     : policyArg === 'seal'
       ? [new SealPolicy()]
-      : layout
-        ? [new StaticPolicy(layout as keyof typeof LAYOUTS)]
-        : [
-            ...Object.keys(LAYOUTS).map((l) => new StaticPolicy(l as keyof typeof LAYOUTS)),
-            new ReactivePolicy(),
-            new SealPolicy(),
-          ];
+      : policyArg === 'mono'
+        ? [new MonoPolicy((val('--tower') as any) ?? 'gun')]
+        : layout
+          ? [new StaticPolicy(layout as keyof typeof LAYOUTS)]
+          : [
+              ...Object.keys(LAYOUTS).map((l) => new StaticPolicy(l as keyof typeof LAYOUTS)),
+              new ReactivePolicy(),
+              new SealPolicy(),
+              new MonoPolicy(),
+            ];
 
   console.log(`Single run @ defaults · target=wave ${config.targetWave}\n`);
-  const hdr = ['policy', 'won', 'cleared', 'wall', 'lives', 'kills', 'wrecked', 'climb', 'bomb'];
-  const widths = [16, 4, 8, 5, 6, 6, 8, 6, 6];
+  const hdr = ['policy', 'won', 'cleared', 'wall', 'lives', 'kills', 'wrecked', 'climb', 'bomb', 'armor'];
+  const widths = [16, 4, 8, 5, 6, 6, 8, 6, 6, 8];
   console.log(hdr.map((h, i) => pad(h, widths[i])).join(''));
   console.log('-'.repeat(widths.reduce((a, b) => a + b, 0)));
   for (const p of policies) {
@@ -83,6 +86,7 @@ if (has('--sweep')) {
         pad(r.towersWrecked, widths[6]),
         pad(r.learnedClimb ? 'Y' : 'n', widths[7]),
         pad(r.learnedBomb ? 'Y' : 'n', widths[8]),
+        pad(r.learnedArmor ? r.armorType ?? 'Y' : 'n', widths[9]),
       ].join(''),
     );
   }

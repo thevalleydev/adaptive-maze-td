@@ -69,6 +69,13 @@ export interface Config {
   bombTime: number; // seconds a bomber spends destroying a wall
   frustrationToBomb: number; // forced-climber deaths before the swarm learns to bomb
 
+  // --- Armor evolution (the counter to mono-tower spam) ---
+  // Lean too hard on one damage type and the swarm hardens against it: newly
+  // spawned creeps shrug off that type, forcing you to diversify your defense.
+  armorResist: number; // fraction of the hardened type's damage that armor negates (0..1)
+  armorDamageThreshold: number; // damage of ONE type dealt before the swarm can harden to it
+  armorDominance: number; // that type must be >= this fraction of recent damage to trigger (0..1)
+
   // --- Player level-ups ---
   levelUpEvery: number; // grant a level-up every N waves cleared
   levelUpDiscount: number; // "cheaper" reward: tower cost multiplier (e.g. 0.85)
@@ -122,6 +129,10 @@ export const config: Config = {
   bombTime: 2.5,
   frustrationToBomb: 12,
 
+  armorResist: 0.55,
+  armorDamageThreshold: 3500,
+  armorDominance: 0.6,
+
   levelUpEvery: 5,
   levelUpDiscount: 0.85,
   levelUpBuff: 1.25,
@@ -136,6 +147,17 @@ export const view = {
   enemyAdaptation: true, // creeps learn to climb/bomb walls (the arms race)
 };
 
+// --- Damage types ------------------------------------------------------------
+// Each attacker deals one type. The swarm can harden against ONE type at a time
+// (see armor evolution in World), so a mono-type defense eventually bounces off.
+export type DamageType = 'kinetic' | 'blast' | 'frost';
+export const DAMAGE_TYPES: DamageType[] = ['kinetic', 'blast', 'frost'];
+export const DAMAGE_TYPE_LABEL: Record<DamageType, string> = {
+  kinetic: 'Kinetic',
+  blast: 'Blast',
+  frost: 'Frost',
+};
+
 // --- Tower types -------------------------------------------------------------
 export type TowerKind = 'gun' | 'frost' | 'cannon' | 'vent' | 'wall';
 
@@ -148,6 +170,7 @@ export interface TowerDef {
   color: string;
   hotkey: string;
   blurb: string; // one-line role description for the UI
+  damageType?: DamageType; // armor counters this; omitted for non-damaging towers
   splashRadius?: number; // cannon: AoE radius in tiles
   slowAmount?: number; // frost: speed multiplier applied to hit enemies (e.g. 0.5)
   slowDuration?: number; // frost: seconds the slow lasts
@@ -165,6 +188,7 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     fireRate: 2.0,
     color: '#1f6feb',
     hotkey: '1',
+    damageType: 'kinetic',
     blurb: 'Cheap, reliable single-target DPS.',
   },
   frost: {
@@ -177,6 +201,7 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     slowAmount: 0.5,
     slowDuration: 1.2,
     hotkey: '2',
+    damageType: 'frost',
     blurb: 'Slows enemies; clumps them for splash.',
   },
   cannon: {
@@ -192,6 +217,7 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     color: '#d29922',
     splashRadius: 1.6,
     hotkey: '3',
+    damageType: 'blast',
     blurb: 'Heavy hits + splash; great vs tanks/clumps.',
   },
   vent: {
@@ -275,6 +301,9 @@ export const sliders: [keyof Config, string, number, number, number][] = [
   ['towerCostGrowth', 'Cost growth', 0, 0.5, 0.01],
   ['climbSpeedMult', 'Climb speed x', 0.1, 1, 0.05],
   ['frustrationToBomb', 'Bomb after', 1, 40, 1],
+  ['armorResist', 'Armor resist x', 0, 0.9, 0.05],
+  ['armorDamageThreshold', 'Armor after dmg', 500, 10000, 250],
+  ['armorDominance', 'Armor dominance', 0.34, 1, 0.02],
   ['levelUpBuff', 'LvlUp buff x', 1, 2, 0.05],
   ['levelUpDiscount', 'LvlUp cost x', 0.5, 1, 0.05],
 ];
