@@ -445,7 +445,13 @@ export class World {
     // Creep adaptation inputs (only when enabled).
     const wallCost = this.effectiveWallCost();
     const opts = adapt
-      ? { wallCost, bombLearned: this.evolution.bomb, pressureBias: this.effectivePressureBias(), onBlocked: () => this.learnClimb() }
+      ? {
+          wallCost,
+          bombLearned: this.evolution.bomb,
+          pressureBias: this.effectivePressureBias(),
+          seeking: this.evolution.seek,
+          onBlocked: () => this.learnClimb(),
+        }
       : {};
     for (const e of this.enemies) e.update(dt, this.grid, opts);
 

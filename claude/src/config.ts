@@ -70,6 +70,7 @@ export interface Config {
   frustrationToBomb: number; // forced-climber deaths before the swarm learns to bomb
   crackLure: number; // pull toward hot/cracking tiles once crack-seeking is learned (neg bias)
   seekAfterCollapses: number; // collapses the player causes before the swarm learns to exploit cracks
+  sapRate: number; // bonus pressure/sec a seeking creep pumps into a cracked tile it stands on
 
   // --- Armor evolution (the counter to mono-tower spam) ---
   // Lean too hard on one damage type and the swarm hardens against it: newly
@@ -88,7 +89,7 @@ export const config: Config = {
   pressureRate: 9,
   decayRate: 1.5,
   crackThreshold: 30,
-  collapseThreshold: 55,
+  collapseThreshold: 48,
   telegraphDuration: 2.5,
   pressureAvoidance: 3,
 
@@ -131,7 +132,8 @@ export const config: Config = {
   bombTime: 2.5,
   frustrationToBomb: 12,
   crackLure: 6,
-  seekAfterCollapses: 8,
+  seekAfterCollapses: 4,
+  sapRate: 28,
 
   armorResist: 0.55,
   armorDamageThreshold: 3500,
@@ -325,6 +327,7 @@ export const sliders: [keyof Config, string, number, number, number][] = [
   ['frustrationToBomb', 'Bomb after', 1, 40, 1],
   ['crackLure', 'Crack lure', 0, 15, 0.5],
   ['seekAfterCollapses', 'Seek after', 1, 40, 1],
+  ['sapRate', 'Sap rate', 0, 60, 1],
   ['armorResist', 'Armor resist x', 0, 0.9, 0.05],
   ['armorDamageThreshold', 'Armor after dmg', 500, 10000, 250],
   ['armorDominance', 'Armor dominance', 0.34, 1, 0.02],

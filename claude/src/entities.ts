@@ -69,7 +69,7 @@ export class Enemy {
   update(
     dt: number,
     grid: Grid,
-    opts: { wallCost?: number; bombLearned?: boolean; pressureBias?: number; onBlocked?: () => void } = {},
+    opts: { wallCost?: number; bombLearned?: boolean; pressureBias?: number; seeking?: boolean; onBlocked?: () => void } = {},
   ) {
     if (this.dead || this.leaked) return;
     const wallCost = opts.wallCost ?? Infinity;
@@ -123,7 +123,14 @@ export class Enemy {
     this.climbing = onStructure;
     if (onStructure) this.everClimbed = true;
     // Pressure only accrues on real ground (not while clambering over a wall).
-    if (tile && !onStructure) grid.addPressure(tile.x, tile.y, config.pressureRate * this.def.pressureMult * dt);
+    if (tile && !onStructure) {
+      grid.addPressure(tile.x, tile.y, config.pressureRate * this.def.pressureMult * dt);
+      // Sapper: a crack-seeking creep actively pumps extra pressure into cracked
+      // ground it's standing on, deliberately caving it in (weaponized collapse).
+      if (opts.seeking && (tile.state === 'cracked' || tile.state === 'collapsing')) {
+        grid.addPressure(tile.x, tile.y, config.sapRate * dt);
+      }
+    }
 
     const terrain = tile ? grid.speedMult(tile) : 1;
     const climbMul = onStructure ? config.climbSpeedMult : 1;

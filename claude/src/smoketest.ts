@@ -169,4 +169,35 @@ const seekPath = findPath(g3, g3.spawn, g3.exit, Infinity, -config.crackLure);
 console.log(JSON.stringify({ avoidThroughHot: through(avoidPath), seekThroughHot: through(seekPath) }));
 if (through(avoidPath)) throw new Error('FAIL: normal creep walked through the hot tile');
 if (!through(seekPath)) throw new Error('FAIL: crack-seeker did not steer into the hot tile');
-console.log('SCENARIO 3 (crack-seeking pathfinding) PASSED');
+console.log('SCENARIO 3 (crack-seeking pathfinding) PASSED\n');
+
+// --- Scenario 4: sapper pressure caves in ground that normal walking wouldn't ---
+// Drive one tile for 6s with either sapper pressure (seeker actively caving it
+// in) or plain movement pressure (a normal creep loitering). The sapper should
+// collapse it; the walker should not.
+// Restore realistic rates (scenario 1 cranked the shared config singleton).
+config.pressureRate = 9;
+config.decayRate = 1.5;
+const g4 = new Grid();
+const sapTile = { x: 10, y: g4.spawn.y };
+// Seconds until the tile collapses under a steady pressure rate (Infinity = none).
+const timeToCollapse = (rate: number): number => {
+  const t = g4.at(sapTile.x, sapTile.y)!;
+  t.state = 'normal';
+  t.pressure = 0;
+  t.collapseTimer = 0;
+  t.rubbleAge = 0;
+  for (let f = 0; f < 60 * 30; f++) {
+    g4.addPressure(t.x, t.y, rate * dt);
+    g4.update(dt);
+    if (t.state === 'collapsed') return f * dt;
+  }
+  return Infinity;
+};
+// A normal creep deposits movement pressure; a sapper adds the sap bonus on top.
+const walkSec = timeToCollapse(config.pressureRate);
+const sapSec = timeToCollapse(config.pressureRate + config.sapRate);
+console.log(JSON.stringify({ sapSec: +sapSec.toFixed(1), walkSec: +walkSec.toFixed(1) }));
+if (!isFinite(sapSec)) throw new Error('FAIL: sapper never collapsed the tile');
+if (sapSec >= walkSec) throw new Error('FAIL: sapper did not collapse faster than plain walking');
+console.log('SCENARIO 4 (sapper caves in ground faster) PASSED');
