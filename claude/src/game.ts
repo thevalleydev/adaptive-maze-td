@@ -372,39 +372,120 @@ export class Game {
         ctx.fillStyle = `rgba(255,120,40,${0.25 + 0.45 * pulse})`;
         ctx.fillRect(tx, ty, TILE, TILE);
       }
+      // Heading: face the next waypoint so silhouettes orient along travel.
+      let hx = 1;
+      let hy = 0;
+      const wp = e.path[e.pathIndex];
+      if (wp) {
+        const dx = wp.x - e.x;
+        const dy = wp.y - e.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.01) {
+          hx = dx / d;
+          hy = dy / d;
+        }
+      }
+      const rb = TILE * def.radius;
+
+      // --- Archetype silhouette (insectoid swarm) ---
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.atan2(hy, hx));
       ctx.fillStyle = def.color;
-      ctx.beginPath();
-      ctx.arc(cx, cy, TILE * def.radius, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth = 1;
+      if (e.kind === 'runner') {
+        // Fast dart.
+        ctx.beginPath();
+        ctx.moveTo(rb * 1.6, 0);
+        ctx.lineTo(-rb * 0.9, rb);
+        ctx.lineTo(-rb * 0.35, 0);
+        ctx.lineTo(-rb * 0.9, -rb);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else if (e.kind === 'brute') {
+        // Heavy plated hexagon + legs + payload sac.
+        ctx.strokeStyle = def.color;
+        ctx.lineWidth = 2;
+        for (const sy of [-1, 1]) for (const lx of [-0.45, 0.45]) {
+          ctx.beginPath();
+          ctx.moveTo(lx * rb, sy * rb * 0.85);
+          ctx.lineTo(lx * rb * 1.15, sy * rb * 1.5);
+          ctx.stroke();
+        }
+        ctx.fillStyle = def.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const px = Math.cos(a) * rb * 1.15;
+          const py = Math.sin(a) * rb * 1.15;
+          i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        const pulse = e.bombing ? 0.5 + 0.5 * Math.sin(performance.now() / 60) : 0.4;
+        ctx.fillStyle = `rgba(40,10,6,${0.45 + 0.4 * pulse})`;
+        ctx.beginPath();
+        ctx.arc(0, 0, rb * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Grunt: segmented beetle — legs, oval body, small head.
+        ctx.strokeStyle = def.color;
+        ctx.lineWidth = 2;
+        for (const sy of [-1, 1]) for (const lx of [-0.5, 0, 0.5]) {
+          ctx.beginPath();
+          ctx.moveTo(lx * rb, sy * rb * 0.6);
+          ctx.lineTo(lx * rb * 1.1, sy * rb * 1.35);
+          ctx.stroke();
+        }
+        ctx.fillStyle = def.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rb * 1.25, rb * 0.9, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(rb * 1.05, 0, rb * 0.42, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.lineWidth = 1;
+
+      // --- Status / evolution rings (shape-agnostic, around the body) ---
+      const ring = rb * 1.35;
       if (e.climbing) {
-        // Scaling a wall — dashed light outline.
         ctx.strokeStyle = 'rgba(220,220,230,0.95)';
         ctx.lineWidth = 2;
         ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, ring, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.lineWidth = 1;
       } else if (e.slowFactor < 1) {
         ctx.strokeStyle = '#3fd6ff';
         ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ring, 0, Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
       }
       if (e.bombing) {
-        // Fuse arc filling toward detonation.
         const p = Math.min(1, e.bombTimer / config.bombTime);
         ctx.strokeStyle = 'rgba(255,140,40,0.95)';
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(cx, cy, TILE * 0.4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
+        ctx.arc(cx, cy, ring + 2, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
       }
       if (e.armorType) {
-        // Hardened plating: a heavy ring in the resisted type's colour, with
-        // short radial "plates" so it reads as armour, not another status glow.
+        // Hardened plating in the resisted type's colour.
         const col = ARMOR_COLOR[e.armorType];
-        const r = TILE * (def.radius + 0.16);
+        const r = ring + TILE * 0.05;
         ctx.strokeStyle = col;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
@@ -419,6 +500,15 @@ export class Game {
         }
         ctx.lineWidth = 1;
       }
+      if (world.evolution.seek) {
+        // Crack-sensor: a warm glowing tip at the front.
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 110 + e.id);
+        ctx.fillStyle = `rgba(255,150,60,${0.55 + 0.45 * pulse})`;
+        ctx.beginPath();
+        ctx.arc(cx + hx * rb * 1.5, cy + hy * rb * 1.5, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       const w = TILE * 0.6;
       ctx.fillStyle = '#30363d';
       ctx.fillRect(cx - w / 2, cy - TILE * 0.46, w, 3);
