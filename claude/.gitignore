@@ -6,3 +6,6 @@ sim/results.csv
 sim/results.json
 # local dev server log
 vite.log
+# score database (local data, regenerated)
+server/scores.db
+server/scores.db-*

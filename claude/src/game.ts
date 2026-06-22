@@ -3,6 +3,8 @@ import { TILE, COLS, ROWS } from './grid';
 import { Pt } from './astar';
 import { World } from './world';
 import { audio } from './audio';
+import { seedToCode } from './rng';
+import * as scores from './scoreClient';
 
 // Armor ring colours — matched to the tower whose damage type they resist, so a
 // hardened creep visibly "reads" as immune to that colour of fire.
@@ -22,6 +24,11 @@ export class Game {
   onSeedChange?: (seed: number | null) => void;
   learnBanner = '';
   learnTimer = 0;
+
+  // --- Score DB ---
+  record: scores.Record | null = null; // this seed's best, from the score server
+  newBestThisRun = false;
+  private runRecorded = false;
 
   ctx: CanvasRenderingContext2D;
 
@@ -80,11 +87,36 @@ export class Game {
 
   reset() {
     this.world.reset(); // replay the same seed
+    this.runRecorded = false;
+    this.newBestThisRun = false;
+    this.refreshRecord();
   }
 
   newRun(seed: number) {
     this.world.loadSeed(seed);
     this.onSeedChange?.(seed);
+    this.runRecorded = false;
+    this.newBestThisRun = false;
+    this.refreshRecord();
+  }
+
+  // Fetch this seed's best from the score server (or local fallback) for the HUD.
+  refreshRecord() {
+    if (this.world.seed === null) {
+      this.record = null;
+      return;
+    }
+    scores.getRecord(seedToCode(this.world.seed)).then((r) => (this.record = r));
+  }
+
+  // Persist the finished run once, when death ends it.
+  private recordRun() {
+    if (this.world.seed === null) return;
+    const code = seedToCode(this.world.seed);
+    scores.postRun(this.world.runSummary(code)).then((r) => {
+      this.newBestThisRun = r.newBest;
+      this.refreshRecord();
+    });
   }
 
   constructor(canvas: HTMLCanvasElement, seed: number | null = null) {
@@ -120,6 +152,8 @@ export class Game {
       const t = TOWER_ORDER.find((k) => TOWER_DEFS[k].hotkey === e.key);
       if (t) this.selectedKind = t;
     });
+
+    this.refreshRecord(); // load this seed's best for the HUD
   }
 
   update(dt: number) {
@@ -138,6 +172,10 @@ export class Game {
       this.learnTimer = 3.5;
     }
     if (this.learnTimer > 0) this.learnTimer -= dt;
+    if (this.world.gameOver && !this.runRecorded) {
+      this.runRecorded = true;
+      this.recordRun();
+    }
     this.emitSounds();
   }
 
@@ -521,7 +559,16 @@ export class Game {
       ctx.font = '15px monospace';
       const passed = made ? ` · ★ passed wave ${config.targetWave}` : ` · target was ${config.targetWave}`;
       ctx.fillText(`died on wave ${world.wave} · ${world.kills} kills${passed}`, W / 2, (ROWS * TILE) / 2 + 16);
-      ctx.fillText('press "Reset map" to play again', W / 2, (ROWS * TILE) / 2 + 40);
+      if (this.newBestThisRun) {
+        ctx.fillStyle = '#f0c43e';
+        ctx.font = 'bold 17px monospace';
+        ctx.fillText('★ NEW BEST FOR THIS SEED ★', W / 2, (ROWS * TILE) / 2 + 40);
+      } else if (this.record) {
+        ctx.fillStyle = '#8b949e';
+        ctx.fillText(`seed best: wave ${this.record.bestWave} · ${this.record.bestKills} kills`, W / 2, (ROWS * TILE) / 2 + 40);
+      }
+      ctx.fillStyle = '#c9d1d9';
+      ctx.fillText('press "Reset map" to play again', W / 2, (ROWS * TILE) / 2 + 62);
     }
   }
 

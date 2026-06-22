@@ -181,6 +181,7 @@ export function buildPanel(panel: HTMLElement, game: Game) {
       `leaks    ${game.leaks}\n` +
       `towers   ${game.towers.length}\n` +
       `creeps   ${creeps}\n` +
+      `record   ${game.record ? `wave ${game.record.bestWave} · ${game.record.runs} runs` : '—'}\n` +
       `fps      ${game.fps.toFixed(0)}`;
   };
 }

@@ -20,6 +20,28 @@ function makeMods(): Record<TowerKind, number> {
   return m;
 }
 
+function makeCounts(): Record<TowerKind, number> {
+  const m = {} as Record<TowerKind, number>;
+  for (const k of TOWER_ORDER) m[k] = 0;
+  return m;
+}
+
+// A full record of one finished run — the payload sent to the score DB.
+export interface RunSummary {
+  seed: string;
+  outcome: 'died' | 'reached';
+  wave: number;
+  kills: number;
+  leaks: number;
+  livesLeft: number;
+  durationSec: number;
+  towersBuilt: Record<TowerKind, number>;
+  towersFinal: Record<TowerKind, number>;
+  upgrades: number;
+  levelUps: { kind: string; tower: string }[];
+  evolution: { climb: boolean; bomb: boolean; seek: boolean; armor: string | null };
+}
+
 // The entire simulation — state + update logic, with NO rendering or DOM/input.
 // Both the browser game (via Game) and the headless sim run this exact code, so
 // balance numbers measured in the sim are the numbers the player experiences.
@@ -62,6 +84,12 @@ export class World {
   levelUpsTaken = 0;
   awaitingLevelUp = false;
   levelUpOptions: LevelUpOption[] = [];
+
+  // --- Run analytics (for the score DB — what this run actually did) ---
+  towersBuilt: Record<TowerKind, number> = makeCounts(); // placements per kind
+  upgradesDone = 0; // tower upgrades performed
+  levelUpLog: LevelUpOption[] = []; // the level-up choices taken
+  elapsed = 0; // simulated seconds survived
 
   previewPath: Pt[] | null = null;
   previewVersion = -1;
@@ -133,6 +161,7 @@ export class World {
     if (!t || cost === null || this.money < cost) return false;
     this.money -= cost;
     t.level++;
+    this.upgradesDone++;
     return true;
   }
 
@@ -155,6 +184,7 @@ export class World {
     this.grid.setBlocked(x, y, true);
     this.towers.push(new Tower(x, y, kind));
     this.money -= cost;
+    this.towersBuilt[kind]++;
     return true;
   }
 
@@ -258,6 +288,7 @@ export class World {
     if (!o) return;
     if (o.kind === 'stronger') this.statMod[o.tower] *= config.levelUpBuff;
     else this.costMod[o.tower] *= config.levelUpDiscount;
+    this.levelUpLog.push(o);
     this.levelUpsTaken++;
     this.awaitingLevelUp = false;
     this.levelUpOptions = [];
@@ -311,7 +342,36 @@ export class World {
     this.levelUpsTaken = 0;
     this.awaitingLevelUp = false;
     this.levelUpOptions = [];
+    this.towersBuilt = makeCounts();
+    this.upgradesDone = 0;
+    this.levelUpLog = [];
+    this.elapsed = 0;
     this.previewVersion = -1;
+  }
+
+  // Snapshot the finished run for the score DB.
+  runSummary(seedCode: string): RunSummary {
+    const towersFinal = makeCounts();
+    for (const t of this.towers) towersFinal[t.kind]++;
+    return {
+      seed: seedCode,
+      outcome: this.reachedTarget ? 'reached' : 'died',
+      wave: this.wave,
+      kills: this.kills,
+      leaks: this.leaks,
+      livesLeft: this.lives,
+      durationSec: Math.round(this.elapsed),
+      towersBuilt: { ...this.towersBuilt },
+      towersFinal,
+      upgrades: this.upgradesDone,
+      levelUps: this.levelUpLog.map((o) => ({ kind: o.kind, tower: o.tower })),
+      evolution: {
+        climb: this.evolution.climb,
+        bomb: this.evolution.bomb,
+        seek: this.evolution.seek,
+        armor: this.evolution.armor,
+      },
+    };
   }
 
   // --- Per-frame simulation -------------------------------------------------
@@ -333,6 +393,7 @@ export class World {
   }
 
   private simStep(dt: number) {
+    this.elapsed += dt;
     // Wave state machine.
     if (this.waveActive) {
       if (this.spawnQueue.length > 0) {
