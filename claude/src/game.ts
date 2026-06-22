@@ -2,6 +2,7 @@ import { config, view, TowerKind, TOWER_DEFS, TOWER_ORDER, ENEMY_DEFS, DamageTyp
 import { TILE, COLS, ROWS } from './grid';
 import { Pt } from './astar';
 import { World } from './world';
+import { audio } from './audio';
 
 // Armor ring colours — matched to the tower whose damage type they resist, so a
 // hardened creep visibly "reads" as immune to that colour of fire.
@@ -23,6 +24,10 @@ export class Game {
   learnTimer = 0;
 
   ctx: CanvasRenderingContext2D;
+
+  // Previous observable state, diffed each frame to fire SFX from the
+  // presentation layer (so world.ts stays Audio/DOM-free + deterministic).
+  private prev = { kills: 0, leaks: 0, shots: 0, reachedTarget: false, gameOver: false, awaitingLevelUp: false };
 
   // Convenience getters so the panel/stats code reads naturally.
   get money() {
@@ -98,14 +103,18 @@ export class Game {
     canvas.addEventListener('mouseleave', () => (this.hover = null));
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('mousedown', (e) => {
+      audio.resume(); // first gesture unlocks WebAudio
       const r = canvas.getBoundingClientRect();
       const x = Math.floor((e.clientX - r.left) / TILE);
       const y = Math.floor((e.clientY - r.top) / TILE);
       if (e.button === 0) {
         // Click your own tower to upgrade it; an empty tile to build.
-        if (this.world.towers.some((t) => t.x === x && t.y === y)) this.world.tryUpgradeTower(x, y);
-        else this.world.tryPlaceTower(x, y, this.selectedKind);
-      } else if (e.button === 2) this.world.trySellTower(x, y);
+        if (this.world.towers.some((t) => t.x === x && t.y === y)) {
+          if (this.world.tryUpgradeTower(x, y)) audio.upgrade();
+        } else if (this.world.tryPlaceTower(x, y, this.selectedKind)) audio.build();
+      } else if (e.button === 2) {
+        if (this.world.trySellTower(x, y)) audio.sell();
+      }
     });
     window.addEventListener('keydown', (e) => {
       const t = TOWER_ORDER.find((k) => TOWER_DEFS[k].hotkey === e.key);
@@ -127,6 +136,28 @@ export class Game {
       this.learnTimer = 3.5;
     }
     if (this.learnTimer > 0) this.learnTimer -= dt;
+    this.emitSounds();
+  }
+
+  // Diff the world's observable state against last frame and fire SFX. Keeps all
+  // audio out of world.ts (which the headless sim shares).
+  private emitSounds() {
+    const w = this.world;
+    if (w.shotsFired > this.prev.shots) audio.shoot();
+    if (w.kills > this.prev.kills) audio.kill();
+    if (w.leaks > this.prev.leaks) audio.leak();
+    if (w.grid.justCollapsed.length) audio.collapse();
+    if (this.world.justLearned) audio.evolve();
+    if (w.awaitingLevelUp && !this.prev.awaitingLevelUp) audio.levelUp();
+    if (w.reachedTarget && !this.prev.reachedTarget) audio.win(); // milestone fanfare
+    if (w.gameOver && !this.prev.gameOver) audio.lose(); // death always ends the run
+
+    this.prev.shots = w.shotsFired;
+    this.prev.kills = w.kills;
+    this.prev.leaks = w.leaks;
+    this.prev.awaitingLevelUp = w.awaitingLevelUp;
+    this.prev.reachedTarget = w.reachedTarget;
+    this.prev.gameOver = w.gameOver;
   }
 
   render() {
@@ -227,13 +258,27 @@ export class Game {
         ctx.fillRect(t.x * TILE + 2, t.y * TILE + 2, TILE - 4, TILE - 4);
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.strokeRect(t.x * TILE + 2.5, t.y * TILE + 2.5, TILE - 5, TILE - 5);
-      } else {
-        ctx.fillStyle = def.color;
-        ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+        // Brick courses so a wall reads as masonry, not a flat panel.
+        ctx.strokeStyle = 'rgba(0,0,0,0.28)';
         ctx.beginPath();
-        ctx.arc(cx, cy, TILE * 0.34, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.moveTo(t.x * TILE + 3, cy);
+        ctx.lineTo(t.x * TILE + TILE - 3, cy);
+        ctx.moveTo(cx, t.y * TILE + 3);
+        ctx.lineTo(cx, cy);
         ctx.stroke();
+      } else {
+        // Ease the barrel toward the tower's live target so it points where it
+        // shoots. targetId persists between shots, so the turret keeps tracking
+        // while reloading and only drifts free once nothing is in range.
+        const tgt = t.targetId != null ? world.enemies.find((e) => e.id === t.targetId && !e.dead && !e.leaked) : undefined;
+        if (tgt) {
+          const desired = Math.atan2(tgt.y * TILE + TILE / 2 - cy, tgt.x * TILE + TILE / 2 - cx);
+          // Shortest-arc ease (frame-rate-light constant; turrets are snappy but not instant).
+          let d = desired - t.aimAngle;
+          d = Math.atan2(Math.sin(d), Math.cos(d));
+          t.aimAngle += d * 0.3;
+        }
+        this.drawTowerSilhouette(t.kind, cx, cy, def.color, t.aimAngle);
         if (def.ventRate) {
           // Square coverage ring — matches exactly the tiles it vents.
           const ext = Math.max(1, Math.round(def.ventRadius ?? def.range));
@@ -476,6 +521,143 @@ export class Game {
       ctx.fillText(`died on wave ${world.wave} · ${world.kills} kills${passed}`, W / 2, (ROWS * TILE) / 2 + 16);
       ctx.fillText('press "Reset map" to play again', W / 2, (ROWS * TILE) / 2 + 40);
     }
+  }
+
+  // Per-kind tower shapes so type reads at a glance (color alone is hard to tell
+  // apart). Each draws a filled body in the tower's colour with a light outline.
+  private drawTowerSilhouette(kind: TowerKind, cx: number, cy: number, color: string, aim = 0) {
+    const ctx = this.ctx;
+    const r = TILE * 0.32;
+
+    // Soft mounting shadow grounds every tower against the board.
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 3, r * 1.05, r * 0.68, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+
+    if (kind === 'gun') {
+      // Turret: a barrel that tracks the target, emerging from under a domed cap.
+      const blen = r + 5;
+      const bw = 5;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(aim);
+      ctx.fillStyle = '#0b0f14'; // casing
+      ctx.fillRect(-3, -bw / 2 - 1, blen + 3, bw + 2);
+      ctx.fillStyle = this.shade(color, -0.08); // barrel
+      ctx.fillRect(-3, -bw / 2, blen, bw);
+      ctx.fillStyle = '#0b0f14'; // muzzle band
+      ctx.fillRect(blen - 3, -bw / 2 - 1, 3, bw + 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.3)'; // top highlight
+      ctx.fillRect(0, -bw / 2 + 0.5, blen - 4, 1);
+      ctx.restore();
+      this.drawDome(cx, cy, r * 0.8, color);
+    } else if (kind === 'cannon') {
+      // Squat mortar: a thick bored barrel that also tracks, on a low hub.
+      const blen = r + 4;
+      const bw = 8;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(aim);
+      ctx.fillStyle = '#0b0f14';
+      ctx.fillRect(-2, -bw / 2 - 1, blen + 2, bw + 2);
+      ctx.fillStyle = this.shade(color, -0.08);
+      ctx.fillRect(-2, -bw / 2, blen, bw);
+      ctx.fillStyle = '#0b0f14'; // bore
+      ctx.beginPath();
+      ctx.arc(blen - 1, 0, bw * 0.34, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      this.drawDome(cx, cy, r * 0.6, color);
+    } else if (kind === 'sniper') {
+      // Long thin rifle barrel on a small mount, with a scope nub — reads as reach.
+      const blen = r + 11;
+      const bw = 3;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(aim);
+      ctx.fillStyle = '#0b0f14'; // casing
+      ctx.fillRect(-2, -bw / 2 - 1, blen + 2, bw + 2);
+      ctx.fillStyle = this.shade(color, -0.05); // barrel
+      ctx.fillRect(-2, -bw / 2, blen, bw);
+      ctx.fillStyle = '#0b0f14'; // scope sitting atop the breech
+      ctx.fillRect(r * 0.1, -bw / 2 - 3, 5, 3);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'; // barrel highlight
+      ctx.fillRect(0, -bw / 2 + 0.5, blen - 4, 1);
+      ctx.restore();
+      this.drawDome(cx, cy, r * 0.55, color);
+    } else if (kind === 'frost') {
+      // Six-armed snowflake on a cold glow, turning slowly so it reads as active.
+      const glow = ctx.createRadialGradient(cx, cy, 1, cx, cy, r * 1.15);
+      glow.addColorStop(0, 'rgba(63,214,255,0.45)');
+      glow.addColorStop(1, 'rgba(63,214,255,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 1.15, 0, Math.PI * 2);
+      ctx.fill();
+      this.drawDome(cx, cy, r * 0.4, color);
+      const spin = performance.now() / 2600;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + spin;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+        // little barbs
+        ctx.moveTo(cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
+        ctx.lineTo(cx + Math.cos(a + 0.5) * r * 0.85, cy + Math.sin(a + 0.5) * r * 0.85);
+        ctx.moveTo(cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
+        ctx.lineTo(cx + Math.cos(a - 0.5) * r * 0.85, cy + Math.sin(a - 0.5) * r * 0.85);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    } else {
+      // Vent: a domed body with a spinning fan grate — the legible "cooling" verb.
+      this.drawDome(cx, cy, r * 0.85, color);
+      const spin = performance.now() / 1400;
+      ctx.strokeStyle = '#0b0f14';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + spin;
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(a) * r * 0.22, cy + Math.sin(a) * r * 0.22);
+        ctx.lineTo(cx + Math.cos(a) * r * 0.72, cy + Math.sin(a) * r * 0.72);
+        ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+    }
+    ctx.lineWidth = 1;
+  }
+
+  // Lighten (amt>0) or darken (amt<0) a #rrggbb colour toward white/black.
+  private shade(hex: string, amt: number): string {
+    const n = parseInt(hex.replace('#', ''), 16);
+    const t = amt < 0 ? 0 : 255;
+    const p = Math.abs(amt);
+    const ch = (shift: number) => {
+      const c = (n >> shift) & 0xff;
+      return Math.round((t - c) * p) + c;
+    };
+    return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+  }
+
+  // A shaded circular dome: lit from the upper-left so towers read as 3D caps.
+  private drawDome(cx: number, cy: number, rad: number, color: string) {
+    const ctx = this.ctx;
+    const g = ctx.createRadialGradient(cx - rad * 0.35, cy - rad * 0.4, rad * 0.1, cx, cy, rad);
+    g.addColorStop(0, this.shade(color, 0.45));
+    g.addColorStop(0.55, color);
+    g.addColorStop(1, this.shade(color, -0.35));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.lineWidth = 1;
   }
 
   private drawCracks(px: number, py: number, lw: number) {

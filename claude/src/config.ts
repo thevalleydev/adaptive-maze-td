@@ -112,7 +112,7 @@ export const config: Config = {
   waveHpGrowth: 0.15, // COMPOUNDING (see World.startWave): ~7x by wave 15, ~14x by 20, ~29x by 25
   targetWave: 15,
 
-  enemySpeed: 2.4,
+  enemySpeed: 2.0,
   enemyHp: 50,
 
   spawnBuffer: 2,
@@ -159,7 +159,7 @@ export const DAMAGE_TYPE_LABEL: Record<DamageType, string> = {
 };
 
 // --- Tower types -------------------------------------------------------------
-export type TowerKind = 'gun' | 'frost' | 'cannon' | 'vent' | 'wall';
+export type TowerKind = 'gun' | 'frost' | 'cannon' | 'sniper' | 'vent' | 'wall';
 
 export interface TowerDef {
   name: string;
@@ -171,6 +171,7 @@ export interface TowerDef {
   hotkey: string;
   blurb: string; // one-line role description for the UI
   damageType?: DamageType; // armor counters this; omitted for non-damaging towers
+  targetMode?: 'progress' | 'strongest'; // default 'progress' (furthest-along); sniper picks highest-HP
   splashRadius?: number; // cannon: AoE radius in tiles
   slowAmount?: number; // frost: speed multiplier applied to hit enemies (e.g. 0.5)
   slowDuration?: number; // frost: seconds the slow lasts
@@ -220,6 +221,23 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     damageType: 'blast',
     blurb: 'Heavy hits + splash; great vs tanks/clumps.',
   },
+  sniper: {
+    // Long-range specialist: covers a huge radius from a cool corner away from the
+    // collapse front, so its uptime stays high while the killbox caves in. Slow,
+    // single-target, and targets the STRONGEST enemy — a hard counter to compounding
+    // brute HP, but helpless against volume (one shot every 2s leaks to a swarm).
+    // Kinetic like the Gun: mono gun+sniper still trips kinetic armor (by design).
+    name: 'Sniper',
+    cost: 110,
+    damage: 65,
+    range: 4.5,
+    fireRate: 0.5,
+    color: '#a371f7',
+    hotkey: '6',
+    damageType: 'kinetic',
+    targetMode: 'strongest',
+    blurb: 'Long-range; picks off the strongest enemy. Slow, weak vs swarms.',
+  },
   vent: {
     // The counter-verb to collapse: drains pressure from nearby ground so you can
     // hold a hot killbox instead of watching it cave in. Deals no damage.
@@ -250,7 +268,7 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
   },
 };
 
-export const TOWER_ORDER: TowerKind[] = ['gun', 'frost', 'cannon', 'vent', 'wall'];
+export const TOWER_ORDER: TowerKind[] = ['gun', 'frost', 'cannon', 'sniper', 'vent', 'wall'];
 
 // --- Enemy types -------------------------------------------------------------
 export type EnemyKind = 'runner' | 'grunt' | 'brute';

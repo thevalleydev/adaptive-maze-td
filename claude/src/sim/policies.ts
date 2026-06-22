@@ -147,6 +147,102 @@ export class MonoPolicy implements Policy {
   }
 }
 
+// Coolest buildable tile that can still SEE the lane from a set-back perch — for
+// the long-range sniper. Scans every buildable tile, keeps those within sniper
+// range of some path tile, and prefers cool ground a little back from the lane
+// (out of the collapse blast). Returns null if nothing in range is buildable.
+function bestSniperPerch(world: World): { x: number; y: number } | null {
+  const path = world.previewPath;
+  if (!path) return null;
+  const range = TOWER_DEFS.sniper.range;
+  let best: { x: number; y: number } | null = null;
+  let bestScore = -Infinity;
+  for (let y = 0; y < world.grid.rows; y++) {
+    for (let x = 0; x < world.grid.cols; x++) {
+      if (!world.canBuildOn(x, y)) continue;
+      let minDist = Infinity;
+      for (const p of path) minDist = Math.min(minDist, Math.hypot(p.x - x, p.y - y));
+      if (minDist > range) continue; // can't reach the lane from here
+      // Cool ground first; among cool tiles, prefer the ones set back from the lane.
+      const score = (100 - world.maxNeighborPressure(x, y)) + 2 * minDist;
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
+      }
+    }
+  }
+  return best;
+}
+
+// Skilled reactive play (relocate before collapse, cover the lane), but allowed
+// to keep up to `sniperCap` snipers on set-back cool ground. Probe question: does
+// the long-range sniper meaningfully shift the brute/leak math vs. gun-only?
+export class SniperBackedPolicy implements Policy {
+  name = 'sniper-backed';
+  sells = 0;
+  private timer = 0;
+  private sniperCap = 2;
+
+  onStart() {}
+
+  onTick(world: World, dt: number) {
+    this.timer -= dt;
+    if (this.timer > 0) return;
+    this.timer = 0.2;
+
+    // 1. Relocate towers next to an imminent collapse (same as reactive).
+    for (const t of [...world.towers]) {
+      if (world.neighborCollapsing(t.x, t.y) && world.trySellTower(t.x, t.y)) this.sells++;
+    }
+
+    // 2. Maintain the sniper perches — buy one when affordable and under the cap.
+    const snipers = world.towers.filter((t) => t.kind === 'sniper').length;
+    if (snipers < this.sniperCap && world.money >= world.towerCost('sniper')) {
+      const perch = bestSniperPerch(world);
+      if (perch) world.tryPlaceTower(perch.x, perch.y, 'sniper');
+    }
+
+    // 3. Spend the rest covering the lane with guns on cool ground.
+    let guard = 30;
+    while (world.money > 60 && guard-- > 0) {
+      const spot = bestLanePlacement(world);
+      if (!spot || !world.tryPlaceTower(spot.x, spot.y, 'gun')) break;
+    }
+  }
+}
+
+// Reactive play that deliberately ROTATES damage types (gun→cannon→frost) so no
+// single type dominates. Probe question: does a well-rounded defense dodge the
+// armor evolution entirely? (Expect the armor column to stay 'n'.)
+export class DiversifiedPolicy implements Policy {
+  name = 'diversified';
+  sells = 0;
+  private timer = 0;
+  private next = 0;
+  private rotation: TowerKind[] = ['gun', 'cannon', 'frost'];
+
+  onStart() {}
+
+  onTick(world: World, dt: number) {
+    this.timer -= dt;
+    if (this.timer > 0) return;
+    this.timer = 0.2;
+
+    for (const t of [...world.towers]) {
+      if (world.neighborCollapsing(t.x, t.y) && world.trySellTower(t.x, t.y)) this.sells++;
+    }
+
+    let guard = 30;
+    while (guard-- > 0) {
+      const kind = this.rotation[this.next % this.rotation.length];
+      if (world.money < world.towerCost(kind)) break;
+      const spot = bestLanePlacement(world);
+      if (!spot || !world.tryPlaceTower(spot.x, spot.y, kind)) break;
+      this.next++;
+    }
+  }
+}
+
 // Pick the coolest buildable tile adjacent to the current preview path — shared
 // by the mono and reactive policies.
 function bestLanePlacement(world: World): { x: number; y: number } | null {

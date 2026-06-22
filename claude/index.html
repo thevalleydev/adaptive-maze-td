@@ -41,7 +41,9 @@
         border-radius: 6px;
         padding: 12px 14px;
       }
-      #panel h1 { font-size: 14px; margin: 0 0 4px; color: var(--accent); }
+      #panel-head { display: flex; align-items: center; gap: 8px; }
+      #panel h1 { font-size: 14px; margin: 0 0 4px; color: var(--accent); flex: 1 1 auto; }
+      #settings-btn { flex: 0 0 auto; padding: 4px 8px; font-size: 14px; line-height: 1; }
       #panel h2 {
         font-size: 11px;
         text-transform: uppercase;
@@ -79,12 +81,36 @@
       #start-btn:hover { background: #2ea043; }
       #levelup { display: flex; flex-direction: column; gap: 4px; margin: 6px 0; }
       .lvl-btn { text-align: left; border-left: 4px solid #f0c43e; }
+
+      /* Settings modal */
+      #modal-overlay {
+        position: fixed; inset: 0; z-index: 100;
+        background: rgba(2, 4, 8, 0.66);
+        display: flex; align-items: center; justify-content: center; padding: 24px;
+      }
+      #modal-overlay[hidden] { display: none; }
+      #modal {
+        width: min(560px, 100%); max-height: 88vh; overflow-y: auto;
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 8px; padding: 16px 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+      }
+      #modal-head { display: flex; align-items: center; margin-bottom: 4px; }
+      #modal-head h2 { margin: 0; flex: 1 1 auto; border: 0; padding: 0; font-size: 13px; color: var(--accent); }
+      #modal-close { flex: 0 0 auto; padding: 3px 9px; }
+      #modal .sliders-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+      @media (max-width: 480px) { #modal .sliders-grid { grid-template-columns: 1fr; } }
     </style>
   </head>
   <body>
     <div id="app">
       <canvas id="game"></canvas>
       <div id="panel"></div>
+    </div>
+    <div id="modal-overlay" hidden>
+      <div id="modal">
+        <div id="modal-head"><h2>Settings &amp; Tuning</h2><button id="modal-close">✕</button></div>
+        <div id="modal-body"></div>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

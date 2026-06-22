@@ -1,8 +1,8 @@
 import { config } from './config';
 
-export const TILE = 34; // px per tile
-export const COLS = 26;
-export const ROWS = 18;
+export const TILE = 40; // px per tile
+export const COLS = 22;
+export const ROWS = 15;
 
 export type TileState = 'normal' | 'cracked' | 'collapsing' | 'collapsed';
 

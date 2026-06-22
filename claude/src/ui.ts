@@ -1,5 +1,6 @@
 import { config, view, sliders, Config, TOWER_ORDER, TOWER_DEFS } from './config';
 import { Game } from './game';
+import { audio } from './audio';
 import { randomSeed, codeToSeed, seedToCode } from './rng';
 
 export function buildPanel(panel: HTMLElement, game: Game) {
@@ -10,7 +11,7 @@ export function buildPanel(panel: HTMLElement, game: Game) {
   }).join('');
 
   panel.innerHTML = `
-    <h1>Adaptive Maze TD</h1>
+    <div id="panel-head"><h1>Adaptive Maze TD</h1><button id="settings-btn" title="Settings &amp; tuning">⚙</button></div>
     <div class="hint">Left-click empty: build &middot; left-click your tower: <b>upgrade</b> &middot; right-click: sell &middot; keys 1-5</div>
 
     <div class="toggle-row"><button id="start-btn">▶ Start</button></div>
@@ -32,28 +33,36 @@ export function buildPanel(panel: HTMLElement, game: Game) {
 
     <h2>Live stats</h2>
     <div id="stats"></div>
+  `;
 
+  // Settings/tuning live in a modal so the main panel never grows a long scroll.
+  const modalBody = document.querySelector('#modal-body') as HTMLElement;
+  modalBody.innerHTML = `
     <h2>View</h2>
     <div class="toggle-row">
       <label><input type="checkbox" id="t-heat" checked> heatmap</label>
       <label><input type="checkbox" id="t-path" checked> path</label>
       <label><input type="checkbox" id="t-wreck" checked> collapse wrecks towers</label>
       <label><input type="checkbox" id="t-adapt" checked> creeps adapt</label>
+      <label><input type="checkbox" id="t-mute"> mute audio</label>
       <label><input type="checkbox" id="t-pause"> pause</label>
     </div>
 
     <h2>Tuning</h2>
-    <div id="sliders"></div>
+    <div id="sliders" class="sliders-grid"></div>
   `;
 
   const statsEl = panel.querySelector('#stats')!;
-  const slidersEl = panel.querySelector('#sliders')!;
+  const slidersEl = modalBody.querySelector('#sliders')!;
   const descEl = panel.querySelector('#tower-desc')!;
   const towerBtns = Array.from(panel.querySelectorAll<HTMLButtonElement>('.tower-btn'));
   const seedIn = panel.querySelector('#seed-in') as HTMLInputElement;
   const startBtn = panel.querySelector('#start-btn') as HTMLButtonElement;
   const levelupEl = panel.querySelector('#levelup')!;
-  startBtn.addEventListener('click', () => game.start());
+  startBtn.addEventListener('click', () => {
+    audio.resume();
+    game.start();
+  });
 
   for (const btn of towerBtns) {
     btn.addEventListener('click', () => {
@@ -90,11 +99,29 @@ export function buildPanel(panel: HTMLElement, game: Game) {
     slidersEl.appendChild(row);
   }
 
-  bindToggle(panel, '#t-heat', (v) => (view.showHeatmap = v));
-  bindToggle(panel, '#t-path', (v) => (view.showPath = v));
-  bindToggle(panel, '#t-wreck', (v) => (view.collapseWrecksTowers = v));
-  bindToggle(panel, '#t-adapt', (v) => (view.enemyAdaptation = v));
-  bindToggle(panel, '#t-pause', (v) => (view.paused = v));
+  bindToggle(modalBody, '#t-heat', (v) => (view.showHeatmap = v));
+  bindToggle(modalBody, '#t-path', (v) => (view.showPath = v));
+  bindToggle(modalBody, '#t-wreck', (v) => (view.collapseWrecksTowers = v));
+  bindToggle(modalBody, '#t-adapt', (v) => (view.enemyAdaptation = v));
+  bindToggle(modalBody, '#t-pause', (v) => (view.paused = v));
+
+  // Mute reflects the persisted audio state and writes back through it.
+  const muteEl = modalBody.querySelector('#t-mute') as HTMLInputElement;
+  muteEl.checked = audio.muted;
+  muteEl.addEventListener('change', () => audio.setMuted(muteEl.checked));
+
+  // Settings modal open/close (gear button, ✕, backdrop click, Esc).
+  const overlay = document.querySelector('#modal-overlay') as HTMLElement;
+  const openModal = () => (overlay.hidden = false);
+  const closeModal = () => (overlay.hidden = true);
+  panel.querySelector('#settings-btn')!.addEventListener('click', openModal);
+  document.querySelector('#modal-close')!.addEventListener('click', closeModal);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeModal();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !overlay.hidden) closeModal();
+  });
 
   let levelUpRendered = -1; // rebuild option buttons only when they change
 

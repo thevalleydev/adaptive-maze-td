@@ -163,6 +163,9 @@ export class Tower {
   level = 1;
   cooldown = 0;
   targetId: number | null = null;
+  // Presentation-only: current barrel bearing in radians (0 = pointing right).
+  // The renderer eases this toward the live target; the sim never reads it.
+  aimAngle = 0;
 
   constructor(x: number, y: number, kind: TowerKind) {
     this.x = x;
@@ -230,15 +233,19 @@ export class Tower {
     const effRate = Math.max(0.05, this.fireRateEff * (1 - config.pressureTowerDebuff * frac));
 
     const inRange = (e: Enemy) => Math.hypot(e.x - this.x, e.y - this.y) <= this.rangeEff;
-    let target = enemies.find((e) => e.id === this.targetId && !e.dead && !e.leaked && inRange(e));
+    // Sniper re-acquires every shot so it always tracks the current biggest threat;
+    // other towers stick to their target (furthest-along) until it dies or escapes.
+    const strongest = def.targetMode === 'strongest';
+    let target = strongest ? undefined : enemies.find((e) => e.id === this.targetId && !e.dead && !e.leaked && inRange(e));
     if (!target) {
       this.targetId = null;
       let best: Enemy | undefined;
-      let bestProg = -1;
+      let bestScore = -1;
       for (const e of enemies) {
         if (e.dead || e.leaked || !inRange(e)) continue;
-        if (e.pathIndex > bestProg) {
-          bestProg = e.pathIndex;
+        const score = strongest ? e.hp : e.pathIndex;
+        if (score > bestScore) {
+          bestScore = score;
           best = e;
         }
       }

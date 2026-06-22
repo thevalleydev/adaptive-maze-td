@@ -32,6 +32,7 @@ export class World {
   money = 300;
   kills = 0;
   leaks = 0;
+  shotsFired = 0; // monotonic; the presentation layer diffs it for the shoot SFX
 
   // --- Waves / run state ---
   wave = 0;
@@ -232,7 +233,7 @@ export class World {
     this.awaitingLevelUp = true;
     const rng = new RNG((this.seed ?? 1) ^ ((this.levelUpsTaken + 1) * 0x9e3779b1));
     const pool: LevelUpOption[] = [];
-    for (const k of ['gun', 'frost', 'cannon'] as TowerKind[]) {
+    for (const k of ['gun', 'frost', 'cannon', 'sniper'] as TowerKind[]) {
       pool.push({ kind: 'stronger', tower: k, label: `+${Math.round((config.levelUpBuff - 1) * 100)}% ${TOWER_DEFS[k].name} dmg` });
       pool.push({ kind: 'cheaper', tower: k, label: `−${Math.round((1 - config.levelUpDiscount) * 100)}% ${TOWER_DEFS[k].name} cost` });
     }
@@ -280,6 +281,7 @@ export class World {
     this.money = 300;
     this.kills = 0;
     this.leaks = 0;
+    this.shotsFired = 0;
     this.wave = 0;
     this.waveActive = false;
     this.spawnQueue = [];
@@ -376,7 +378,10 @@ export class World {
 
     for (const t of this.towers) {
       const shot = t.update(dt, this.enemies, this.grid, this.statMod[t.kind] ?? 1, this.dmgByType);
-      if (shot) this.shots.push({ ...shot, ttl: 0.06 });
+      if (shot) {
+        this.shots.push({ ...shot, ttl: 0.06 });
+        this.shotsFired++;
+      }
     }
     if (view.enemyAdaptation) this.maybeEvolveArmor();
 
