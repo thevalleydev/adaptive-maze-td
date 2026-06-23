@@ -20,6 +20,28 @@ function makeMods(): Record<TowerKind, number> {
   return m;
 }
 
+function makeCounts(): Record<TowerKind, number> {
+  const m = {} as Record<TowerKind, number>;
+  for (const k of TOWER_ORDER) m[k] = 0;
+  return m;
+}
+
+// A full record of one finished run — the payload sent to the score DB.
+export interface RunSummary {
+  seed: string;
+  outcome: 'died' | 'reached';
+  wave: number;
+  kills: number;
+  leaks: number;
+  livesLeft: number;
+  durationSec: number;
+  towersBuilt: Record<TowerKind, number>;
+  towersFinal: Record<TowerKind, number>;
+  upgrades: number;
+  levelUps: { kind: string; tower: string }[];
+  evolution: { climb: boolean; bomb: boolean; seek: boolean; armor: string | null };
+}
+
 // The entire simulation — state + update logic, with NO rendering or DOM/input.
 // Both the browser game (via Game) and the headless sim run this exact code, so
 // balance numbers measured in the sim are the numbers the player experiences.
@@ -48,8 +70,13 @@ export class World {
   started = false; // prep phase until the player hits Start
 
   // --- Creep evolution (arms race) ---
-  evolution = { climb: false, bomb: false, frustration: 0, armor: null as DamageType | null };
-  justLearned: 'climb' | 'bomb' | 'armor' | null = null; // set the frame an ability is learned (UI banner)
+  evolution = { climb: false, bomb: false, frustration: 0, armor: null as DamageType | null, seek: false };
+  justLearned: 'climb' | 'bomb' | 'armor' | 'seek' | null = null; // set the frame an ability is learned (UI banner)
+  collapseExposure = 0; // collapses the player has caused — drives crack-seeking
+
+  // Per-frame event buffer (drained by the presentation layer into the event
+  // feed). Purely observational — keeps the deterministic core/sim unaffected.
+  events: { msg: string; kind: 'bad' | 'evo' | 'good' | 'info' }[] = [];
   // Damage dealt per type since the last armor adaptation. When one type both
   // crosses the threshold AND dominates, the swarm hardens against it; the tally
   // then resets so the next over-reliance is measured fresh.
@@ -61,6 +88,12 @@ export class World {
   levelUpsTaken = 0;
   awaitingLevelUp = false;
   levelUpOptions: LevelUpOption[] = [];
+
+  // --- Run analytics (for the score DB — what this run actually did) ---
+  towersBuilt: Record<TowerKind, number> = makeCounts(); // placements per kind
+  upgradesDone = 0; // tower upgrades performed
+  levelUpLog: LevelUpOption[] = []; // the level-up choices taken
+  elapsed = 0; // simulated seconds survived
 
   previewPath: Pt[] | null = null;
   previewVersion = -1;
@@ -80,12 +113,48 @@ export class World {
   }
 
   private applyGeneration() {
-    if (this.seed === null) return; // classic centered map, no rocks
+    if (this.seed === null) return; // classic centered map, no rocks (sim)
     const rng = new RNG(this.seed);
     const g = this.grid;
-    g.spawn = { x: 0, y: 2 + rng.int(ROWS - 4) };
-    g.exit = { x: COLS - 1, y: 2 + rng.int(ROWS - 4) };
-    const target = Math.floor(ROWS * COLS * config.rockDensity);
+
+    // --- Semi-structured lanes ---
+    // Carve the field into 2–3 broad channels with horizontal rock dividers, each
+    // with a staggered opening, so flow reads as lanes the player can anchor on —
+    // but the channels stay wide enough to still build maze segments and let the
+    // swarm adapt. Lanes as scaffolding, not rails.
+    const lanes = 2 + rng.int(2); // 2 or 3 channels
+    const dividerRows: number[] = [];
+    for (let d = 1; d < lanes; d++) dividerRows.push(Math.round((ROWS * d) / lanes));
+
+    // Spawn/exit sit in channel centres (open ground), not on a divider.
+    const centres: number[] = [];
+    let prev = 0;
+    for (const edge of [...dividerRows, ROWS]) {
+      centres.push(Math.floor((prev + edge) / 2));
+      prev = edge + 1;
+    }
+    g.spawn = { x: 0, y: centres[rng.int(centres.length)] };
+    g.exit = { x: COLS - 1, y: centres[rng.int(centres.length)] };
+
+    const carve = () => {
+      for (const t of g.tiles) t.rock = false;
+      for (const y of dividerRows) {
+        const gapStart = 2 + rng.int(Math.max(1, COLS - 6));
+        const gapW = 2 + rng.int(2); // 2–3 wide opening, staggered per divider
+        for (let x = 1; x < COLS - 1; x++) {
+          if (x >= gapStart && x < gapStart + gapW) continue;
+          const t = g.at(x, y);
+          if (t && !g.isSpawnOrExit(x, y) && !this.nearSpawn(x, y)) t.rock = true;
+        }
+      }
+    };
+    carve();
+    // Guarantee solvable — re-roll gap positions a few times, else open the map.
+    for (let tries = 0; tries < 8 && !findPath(g, g.spawn, g.exit); tries++) carve();
+    if (!findPath(g, g.spawn, g.exit)) for (const t of g.tiles) t.rock = false;
+
+    // Light texture scatter inside the channels (keeps lanes the dominant shape).
+    const target = Math.floor(ROWS * COLS * config.rockDensity * 0.4);
     let placed = 0;
     let attempts = 0;
     while (placed < target && attempts < target * 12) {
@@ -97,7 +166,7 @@ export class World {
       if (g.isSpawnOrExit(x, y) || this.nearSpawn(x, y)) continue;
       t.rock = true;
       if (!findPath(g, g.spawn, g.exit)) {
-        t.rock = false; // keep the map solvable
+        t.rock = false;
         continue;
       }
       placed++;
@@ -132,6 +201,7 @@ export class World {
     if (!t || cost === null || this.money < cost) return false;
     this.money -= cost;
     t.level++;
+    this.upgradesDone++;
     return true;
   }
 
@@ -154,6 +224,7 @@ export class World {
     this.grid.setBlocked(x, y, true);
     this.towers.push(new Tower(x, y, kind));
     this.money -= cost;
+    this.towersBuilt[kind]++;
     return true;
   }
 
@@ -189,21 +260,37 @@ export class World {
     if (!view.enemyAdaptation) return Infinity;
     return this.evolution.climb ? config.wallCostClimb : Infinity;
   }
+  // Positive = avoid hot tiles (default); negative = SEEK them (crack-seeking).
+  effectivePressureBias(): number {
+    return this.evolution.seek ? -config.crackLure : config.pressureAvoidance;
+  }
+  private learnSeek() {
+    if (!this.evolution.seek) {
+      this.evolution.seek = true;
+      this.justLearned = 'seek';
+      this.events.push({ msg: 'The swarm learned to EXPLOIT CRACKS', kind: 'evo' });
+    }
+  }
   private learnClimb() {
     if (!this.evolution.climb) {
       this.evolution.climb = true;
       this.justLearned = 'climb';
+      this.events.push({ msg: 'The swarm learned to CLIMB walls', kind: 'evo' });
     }
   }
   private learnBomb() {
     if (!this.evolution.bomb) {
       this.evolution.bomb = true;
       this.justLearned = 'bomb';
+      this.events.push({ msg: 'The swarm learned to BOMB walls', kind: 'evo' });
     }
   }
   private bombStructure(x: number, y: number) {
     const i = this.towers.findIndex((t) => t.x === x && t.y === y);
-    if (i !== -1) this.towers.splice(i, 1); // bombed = no salvage; defend it or lose it
+    if (i !== -1) {
+      this.events.push({ msg: `A Brute breached your ${TOWER_DEFS[this.towers[i].kind].name}`, kind: 'bad' });
+      this.towers.splice(i, 1); // bombed = no salvage; defend it or lose it
+    }
     this.grid.setBlocked(x, y, false);
   }
 
@@ -224,6 +311,7 @@ export class World {
     if (this.evolution.armor !== top) {
       this.evolution.armor = top;
       this.justLearned = 'armor';
+      this.events.push({ msg: `Swarm hardened vs ${top} — diversify your damage`, kind: 'evo' });
     }
     for (const t of DAMAGE_TYPES) this.dmgByType[t] = 0; // re-measure the next over-reliance
   }
@@ -231,6 +319,7 @@ export class World {
   // --- Player level-ups -----------------------------------------------------
   private grantLevelUp() {
     this.awaitingLevelUp = true;
+    this.events.push({ msg: '★ Level up — choose a reward', kind: 'good' });
     const rng = new RNG((this.seed ?? 1) ^ ((this.levelUpsTaken + 1) * 0x9e3779b1));
     const pool: LevelUpOption[] = [];
     for (const k of ['gun', 'frost', 'cannon', 'sniper'] as TowerKind[]) {
@@ -247,6 +336,7 @@ export class World {
     if (!o) return;
     if (o.kind === 'stronger') this.statMod[o.tower] *= config.levelUpBuff;
     else this.costMod[o.tower] *= config.levelUpDiscount;
+    this.levelUpLog.push(o);
     this.levelUpsTaken++;
     this.awaitingLevelUp = false;
     this.levelUpOptions = [];
@@ -291,21 +381,53 @@ export class World {
     this.gameOver = false;
     this.reachedTarget = false;
     this.started = false;
-    this.evolution = { climb: false, bomb: false, frustration: 0, armor: null };
+    this.evolution = { climb: false, bomb: false, frustration: 0, armor: null, seek: false };
     this.justLearned = null;
+    this.collapseExposure = 0;
+    this.events = [];
     this.dmgByType = { kinetic: 0, blast: 0, frost: 0 };
     this.statMod = makeMods();
     this.costMod = makeMods();
     this.levelUpsTaken = 0;
     this.awaitingLevelUp = false;
     this.levelUpOptions = [];
+    this.towersBuilt = makeCounts();
+    this.upgradesDone = 0;
+    this.levelUpLog = [];
+    this.elapsed = 0;
     this.previewVersion = -1;
+  }
+
+  // Snapshot the finished run for the score DB.
+  runSummary(seedCode: string): RunSummary {
+    const towersFinal = makeCounts();
+    for (const t of this.towers) towersFinal[t.kind]++;
+    return {
+      seed: seedCode,
+      outcome: this.reachedTarget ? 'reached' : 'died',
+      wave: this.wave,
+      kills: this.kills,
+      leaks: this.leaks,
+      livesLeft: this.lives,
+      durationSec: Math.round(this.elapsed),
+      towersBuilt: { ...this.towersBuilt },
+      towersFinal,
+      upgrades: this.upgradesDone,
+      levelUps: this.levelUpLog.map((o) => ({ kind: o.kind, tower: o.tower })),
+      evolution: {
+        climb: this.evolution.climb,
+        bomb: this.evolution.bomb,
+        seek: this.evolution.seek,
+        armor: this.evolution.armor,
+      },
+    };
   }
 
   // --- Per-frame simulation -------------------------------------------------
   update(dt: number) {
     if (this.gameOver) return; // only death ends the run; the target is endless beyond
     this.justLearned = null;
+    this.events.length = 0;
 
     // Sim only runs once the player hits Start (prep phase before that). Preview
     // still recomputes below so building during prep updates the route.
@@ -321,6 +443,7 @@ export class World {
   }
 
   private simStep(dt: number) {
+    this.elapsed += dt;
     // Wave state machine.
     if (this.waveActive) {
       if (this.spawnQueue.length > 0) {
@@ -337,7 +460,10 @@ export class World {
         // then queue the next wave (the run only ends on death).
         this.waveActive = false;
         this.grid.dissipate(config.betweenWaveDecay);
-        if (this.wave >= config.targetWave) this.reachedTarget = true;
+        if (this.wave >= config.targetWave && !this.reachedTarget) {
+          this.reachedTarget = true;
+          this.events.push({ msg: `★ Target wave ${config.targetWave} cleared — endless now`, kind: 'good' });
+        }
         if (this.wave % config.levelUpEvery === 0) this.grantLevelUp();
         this.betweenTimer = config.interWaveTime;
       }
@@ -349,22 +475,42 @@ export class World {
 
     this.grid.update(dt);
 
-    // A collapse wrecks nearby structures — towers within 1 tile, WALLS within 2.
-    if (view.collapseWrecksTowers && this.grid.justCollapsed.length) {
+    const adapt = view.enemyAdaptation;
+
+    // Tower-destroying collapse is the SWARM'S weapon, not an ambient grind: it
+    // only happens once creeps have learned to seek/sap (weaponize cracks).
+    // Before that, collapse just reroutes the path. Keeps difficulty to two clear
+    // authors — they get tougher, and they adapt to you.
+    if (view.collapseWrecksTowers && this.evolution.seek && this.grid.justCollapsed.length) {
       for (const ct of this.grid.justCollapsed) {
         for (const tw of [...this.towers]) {
           const md = Math.abs(tw.x - ct.x) + Math.abs(tw.y - ct.y);
           const reach = TOWER_DEFS[tw.kind].structural ? 2 : 1;
-          if (md <= reach) this.destroyTowerAt(tw.x, tw.y);
+          if (md <= reach) {
+            this.events.push({ msg: `The swarm caved in your ${TOWER_DEFS[tw.kind].name}`, kind: 'bad' });
+            this.destroyTowerAt(tw.x, tw.y);
+          }
         }
       }
     }
 
+    // The more the player leans on collapses, the more the swarm learns to
+    // weaponize them — seeking cracking ground to cave in your killbox.
+    if (this.grid.justCollapsed.length) {
+      this.collapseExposure += this.grid.justCollapsed.length;
+      if (adapt && !this.evolution.seek && this.collapseExposure >= config.seekAfterCollapses) this.learnSeek();
+    }
+
     // Creep adaptation inputs (only when enabled).
-    const adapt = view.enemyAdaptation;
     const wallCost = this.effectiveWallCost();
     const opts = adapt
-      ? { wallCost, bombLearned: this.evolution.bomb, onBlocked: () => this.learnClimb() }
+      ? {
+          wallCost,
+          bombLearned: this.evolution.bomb,
+          pressureBias: this.effectivePressureBias(),
+          seeking: this.evolution.seek,
+          onBlocked: () => this.learnClimb(),
+        }
       : {};
     for (const e of this.enemies) e.update(dt, this.grid, opts);
 
@@ -398,6 +544,7 @@ export class World {
         }
       } else if (e.leaked) {
         this.leaks++;
+        this.events.push({ msg: `A ${ENEMY_DEFS[e.kind].name} reached the exit (−1 ♥)`, kind: 'bad' });
         if (--this.lives <= 0) {
           this.lives = 0;
           this.gameOver = true;

@@ -5,6 +5,7 @@ import { config } from './config';
 import { Grid } from './grid';
 import { findPath } from './astar';
 import { Enemy, Tower } from './entities';
+import { World } from './world';
 
 const grid = new Grid();
 
@@ -153,4 +154,66 @@ console.log(
   JSON.stringify({ initialTowers, towersWrecked: wrecked, towersRemaining: towers.length }, null, 2),
 );
 if (wrecked === 0) throw new Error('FAIL: a crammed killbox never self-destructed');
-console.log('SCENARIO 2 (crowding self-destructs) PASSED');
+console.log('SCENARIO 2 (crowding self-destructs) PASSED\n');
+
+// --- Scenario 3: crack-seeking pathfinding -------------------------------------
+// On an open grid, make one tile on the straight line very hot. A normal creep
+// (positive pressure bias) should route AROUND it; a crack-seeker (negative bias)
+// should route THROUGH it.
+const g3 = new Grid();
+const row = g3.spawn.y;
+const midX = Math.floor(g3.cols / 2);
+g3.at(midX, row)!.pressure = config.collapseThreshold; // max heat on the lane
+const through = (p: { x: number; y: number }[] | null) => !!p && p.some((t) => t.x === midX && t.y === row);
+const avoidPath = findPath(g3, g3.spawn, g3.exit, Infinity, config.pressureAvoidance);
+const seekPath = findPath(g3, g3.spawn, g3.exit, Infinity, -config.crackLure);
+console.log(JSON.stringify({ avoidThroughHot: through(avoidPath), seekThroughHot: through(seekPath) }));
+if (through(avoidPath)) throw new Error('FAIL: normal creep walked through the hot tile');
+if (!through(seekPath)) throw new Error('FAIL: crack-seeker did not steer into the hot tile');
+console.log('SCENARIO 3 (crack-seeking pathfinding) PASSED\n');
+
+// --- Scenario 4: sapper pressure caves in ground that normal walking wouldn't ---
+// Drive one tile for 6s with either sapper pressure (seeker actively caving it
+// in) or plain movement pressure (a normal creep loitering). The sapper should
+// collapse it; the walker should not.
+// Restore realistic rates (scenario 1 cranked the shared config singleton).
+config.pressureRate = 9;
+config.decayRate = 1.5;
+const g4 = new Grid();
+const sapTile = { x: 10, y: g4.spawn.y };
+// Seconds until the tile collapses under a steady pressure rate (Infinity = none).
+const timeToCollapse = (rate: number): number => {
+  const t = g4.at(sapTile.x, sapTile.y)!;
+  t.state = 'normal';
+  t.pressure = 0;
+  t.collapseTimer = 0;
+  t.rubbleAge = 0;
+  for (let f = 0; f < 60 * 30; f++) {
+    g4.addPressure(t.x, t.y, rate * dt);
+    g4.update(dt);
+    if ((t.state as string) === 'collapsed') return f * dt;
+  }
+  return Infinity;
+};
+// A normal creep deposits movement pressure; a sapper adds the sap bonus on top.
+const walkSec = timeToCollapse(config.pressureRate);
+const sapSec = timeToCollapse(config.pressureRate + config.sapRate);
+console.log(JSON.stringify({ sapSec: +sapSec.toFixed(1), walkSec: +walkSec.toFixed(1) }));
+if (!isFinite(sapSec)) throw new Error('FAIL: sapper never collapsed the tile');
+if (sapSec >= walkSec) throw new Error('FAIL: sapper did not collapse faster than plain walking');
+console.log('SCENARIO 4 (sapper caves in ground faster) PASSED\n');
+
+// --- Scenario 5: lane-structured map generation ---------------------------------
+// Every seeded map must be solvable and actually carve some lane structure (rock).
+let solvable = 0;
+let structured = 0;
+const seeds = [1, 7, 42, 100, 2025, 88888];
+for (const seed of seeds) {
+  const w = new World(seed);
+  if (findPath(w.grid, w.grid.spawn, w.grid.exit)) solvable++;
+  if (w.grid.tiles.some((t) => t.rock)) structured++;
+}
+console.log(JSON.stringify({ solvable: `${solvable}/${seeds.length}`, structured: `${structured}/${seeds.length}` }));
+if (solvable < seeds.length) throw new Error('FAIL: a generated lane map was unsolvable');
+if (structured < seeds.length) throw new Error('FAIL: a generated map had no lane structure');
+console.log('SCENARIO 5 (lane map generation) PASSED');

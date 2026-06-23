@@ -68,6 +68,9 @@ export interface Config {
   wallCostClimb: number; // A* cost to cross a structure once climb is learned
   bombTime: number; // seconds a bomber spends destroying a wall
   frustrationToBomb: number; // forced-climber deaths before the swarm learns to bomb
+  crackLure: number; // pull toward hot/cracking tiles once crack-seeking is learned (neg bias)
+  seekAfterCollapses: number; // collapses the player causes before the swarm learns to exploit cracks
+  sapRate: number; // bonus pressure/sec a seeking creep pumps into a cracked tile it stands on
 
   // --- Armor evolution (the counter to mono-tower spam) ---
   // Lean too hard on one damage type and the swarm hardens against it: newly
@@ -86,7 +89,7 @@ export const config: Config = {
   pressureRate: 9,
   decayRate: 1.5,
   crackThreshold: 30,
-  collapseThreshold: 55,
+  collapseThreshold: 48,
   telegraphDuration: 2.5,
   pressureAvoidance: 3,
 
@@ -117,7 +120,7 @@ export const config: Config = {
 
   spawnBuffer: 2,
   killRewardMult: 1,
-  towerCostGrowth: 0.08,
+  towerCostGrowth: 0, // flat per-kind cost — HP-ramp/armor/evolution carry the anti-snowball job
 
   maxTowerLevel: 3,
   upgradeCostMult: 0.9,
@@ -128,14 +131,17 @@ export const config: Config = {
   wallCostClimb: 25,
   bombTime: 2.5,
   frustrationToBomb: 12,
+  crackLure: 6,
+  seekAfterCollapses: 4,
+  sapRate: 28,
 
   armorResist: 0.55,
   armorDamageThreshold: 3500,
   armorDominance: 0.6,
 
   levelUpEvery: 5,
-  levelUpDiscount: 0.85,
-  levelUpBuff: 1.25,
+  levelUpDiscount: 0.8, // -20% cost per pick
+  levelUpBuff: 1.4, // +40% damage per pick — leveling should feel like real power
 };
 
 // View toggles (not part of the tuning model, but live).
@@ -319,6 +325,9 @@ export const sliders: [keyof Config, string, number, number, number][] = [
   ['towerCostGrowth', 'Cost growth', 0, 0.5, 0.01],
   ['climbSpeedMult', 'Climb speed x', 0.1, 1, 0.05],
   ['frustrationToBomb', 'Bomb after', 1, 40, 1],
+  ['crackLure', 'Crack lure', 0, 15, 0.5],
+  ['seekAfterCollapses', 'Seek after', 1, 40, 1],
+  ['sapRate', 'Sap rate', 0, 60, 1],
   ['armorResist', 'Armor resist x', 0, 0.9, 0.05],
   ['armorDamageThreshold', 'Armor after dmg', 500, 10000, 250],
   ['armorDominance', 'Armor dominance', 0.34, 1, 0.02],

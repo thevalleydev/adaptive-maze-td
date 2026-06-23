@@ -51,9 +51,9 @@ export class Enemy {
     this.slowTimer = Math.max(this.slowTimer, duration);
   }
 
-  private repath(grid: Grid, wallCost: number) {
+  private repath(grid: Grid, wallCost: number, pressureBias: number) {
     const from = { x: Math.round(this.x), y: Math.round(this.y) };
-    const p = findPath(grid, from, grid.exit, wallCost);
+    const p = findPath(grid, from, grid.exit, wallCost, pressureBias);
     if (p && p.length) {
       this.path = p;
       this.pathIndex = p.length > 1 ? 1 : 0;
@@ -66,9 +66,14 @@ export class Enemy {
     this.knownVersion = grid.graphVersion;
   }
 
-  update(dt: number, grid: Grid, opts: { wallCost?: number; bombLearned?: boolean; onBlocked?: () => void } = {}) {
+  update(
+    dt: number,
+    grid: Grid,
+    opts: { wallCost?: number; bombLearned?: boolean; pressureBias?: number; seeking?: boolean; onBlocked?: () => void } = {},
+  ) {
     if (this.dead || this.leaked) return;
     const wallCost = opts.wallCost ?? Infinity;
+    const pressureBias = opts.pressureBias ?? config.pressureAvoidance;
 
     if (this.slowTimer > 0) {
       this.slowTimer -= dt;
@@ -79,7 +84,7 @@ export class Enemy {
     // newly-learned ability or a bombed-open gap is picked up promptly).
     this.repathTimer -= dt;
     if (this.knownVersion !== grid.graphVersion || this.repathTimer <= 0 || this.blocked) {
-      this.repath(grid, wallCost);
+      this.repath(grid, wallCost, pressureBias);
       this.repathTimer = 1.2;
     }
 
@@ -118,7 +123,14 @@ export class Enemy {
     this.climbing = onStructure;
     if (onStructure) this.everClimbed = true;
     // Pressure only accrues on real ground (not while clambering over a wall).
-    if (tile && !onStructure) grid.addPressure(tile.x, tile.y, config.pressureRate * this.def.pressureMult * dt);
+    if (tile && !onStructure) {
+      grid.addPressure(tile.x, tile.y, config.pressureRate * this.def.pressureMult * dt);
+      // Sapper: a crack-seeking creep actively pumps extra pressure into cracked
+      // ground it's standing on, deliberately caving it in (weaponized collapse).
+      if (opts.seeking && (tile.state === 'cracked' || tile.state === 'collapsing')) {
+        grid.addPressure(tile.x, tile.y, config.sapRate * dt);
+      }
+    }
 
     const terrain = tile ? grid.speedMult(tile) : 1;
     const climbMul = onStructure ? config.climbSpeedMult : 1;

@@ -63,13 +63,13 @@ export class Grid {
   // Movement cost of entering a tile. Collapsed tiles are deliberately NOT
   // impassable — they're expensive rubble. This guarantees a path always
   // exists (no softlock) while still pushing the flow to reroute around them.
+  // Terrain-only entry cost. The pressure term (avoid vs. seek) is applied in
+  // findPath via its pressureBias so it can differ per creep.
   enterCost(t: Tile): number {
     let c = 1;
     if (t.state === 'cracked') c += config.crackedCost;
     if (t.state === 'collapsing') c += config.crackedCost;
     if (t.state === 'collapsed') c += config.collapsedCost;
-    // Enemies shy away from building pressure (emergent flow-spreading).
-    c += config.pressureAvoidance * (t.pressure / config.collapseThreshold);
     return c;
   }
 

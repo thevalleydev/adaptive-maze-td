@@ -3,6 +3,8 @@ import { TILE, COLS, ROWS } from './grid';
 import { Pt } from './astar';
 import { World } from './world';
 import { audio } from './audio';
+import { seedToCode } from './rng';
+import * as scores from './scoreClient';
 
 // Armor ring colours — matched to the tower whose damage type they resist, so a
 // hardened creep visibly "reads" as immune to that colour of fire.
@@ -22,6 +24,13 @@ export class Game {
   onSeedChange?: (seed: number | null) => void;
   learnBanner = '';
   learnTimer = 0;
+  // Rolling event feed (drained from world.events) — the "what just happened" log.
+  private feed: { msg: string; kind: string; age: number }[] = [];
+
+  // --- Score DB ---
+  record: scores.Record | null = null; // this seed's best, from the score server
+  newBestThisRun = false;
+  private runRecorded = false;
 
   ctx: CanvasRenderingContext2D;
 
@@ -80,11 +89,36 @@ export class Game {
 
   reset() {
     this.world.reset(); // replay the same seed
+    this.runRecorded = false;
+    this.newBestThisRun = false;
+    this.refreshRecord();
   }
 
   newRun(seed: number) {
     this.world.loadSeed(seed);
     this.onSeedChange?.(seed);
+    this.runRecorded = false;
+    this.newBestThisRun = false;
+    this.refreshRecord();
+  }
+
+  // Fetch this seed's best from the score server (or local fallback) for the HUD.
+  refreshRecord() {
+    if (this.world.seed === null) {
+      this.record = null;
+      return;
+    }
+    scores.getRecord(seedToCode(this.world.seed)).then((r) => (this.record = r));
+  }
+
+  // Persist the finished run once, when death ends it.
+  private recordRun() {
+    if (this.world.seed === null) return;
+    const code = seedToCode(this.world.seed);
+    scores.postRun(this.world.runSummary(code)).then((r) => {
+      this.newBestThisRun = r.newBest;
+      this.refreshRecord();
+    });
   }
 
   constructor(canvas: HTMLCanvasElement, seed: number | null = null) {
@@ -120,6 +154,8 @@ export class Game {
       const t = TOWER_ORDER.find((k) => TOWER_DEFS[k].hotkey === e.key);
       if (t) this.selectedKind = t;
     });
+
+    this.refreshRecord(); // load this seed's best for the HUD
   }
 
   update(dt: number) {
@@ -132,10 +168,21 @@ export class Game {
           ? 'THE SWARM LEARNED TO CLIMB'
           : jl === 'bomb'
             ? 'THE SWARM LEARNED TO BOMB'
-            : `THE SWARM HARDENED VS ${(DAMAGE_TYPE_LABEL[this.world.evolution.armor ?? 'kinetic']).toUpperCase()}`;
+            : jl === 'seek'
+              ? 'THE SWARM LEARNED TO EXPLOIT CRACKS'
+              : `THE SWARM HARDENED VS ${(DAMAGE_TYPE_LABEL[this.world.evolution.armor ?? 'kinetic']).toUpperCase()}`;
       this.learnTimer = 3.5;
     }
     if (this.learnTimer > 0) this.learnTimer -= dt;
+    // Drain world events into the rolling feed; age out after ~8s.
+    for (const ev of this.world.events) this.feed.push({ msg: ev.msg, kind: ev.kind, age: 0 });
+    for (const f of this.feed) f.age += dt;
+    if (this.feed.length > 60) this.feed = this.feed.slice(-30);
+    this.feed = this.feed.filter((f) => f.age < 8);
+    if (this.world.gameOver && !this.runRecorded) {
+      this.runRecorded = true;
+      this.recordRun();
+    }
     this.emitSounds();
   }
 
@@ -332,39 +379,120 @@ export class Game {
         ctx.fillStyle = `rgba(255,120,40,${0.25 + 0.45 * pulse})`;
         ctx.fillRect(tx, ty, TILE, TILE);
       }
+      // Heading: face the next waypoint so silhouettes orient along travel.
+      let hx = 1;
+      let hy = 0;
+      const wp = e.path[e.pathIndex];
+      if (wp) {
+        const dx = wp.x - e.x;
+        const dy = wp.y - e.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.01) {
+          hx = dx / d;
+          hy = dy / d;
+        }
+      }
+      const rb = TILE * def.radius;
+
+      // --- Archetype silhouette (insectoid swarm) ---
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.atan2(hy, hx));
       ctx.fillStyle = def.color;
-      ctx.beginPath();
-      ctx.arc(cx, cy, TILE * def.radius, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth = 1;
+      if (e.kind === 'runner') {
+        // Fast dart.
+        ctx.beginPath();
+        ctx.moveTo(rb * 1.6, 0);
+        ctx.lineTo(-rb * 0.9, rb);
+        ctx.lineTo(-rb * 0.35, 0);
+        ctx.lineTo(-rb * 0.9, -rb);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+      } else if (e.kind === 'brute') {
+        // Heavy plated hexagon + legs + payload sac.
+        ctx.strokeStyle = def.color;
+        ctx.lineWidth = 2;
+        for (const sy of [-1, 1]) for (const lx of [-0.45, 0.45]) {
+          ctx.beginPath();
+          ctx.moveTo(lx * rb, sy * rb * 0.85);
+          ctx.lineTo(lx * rb * 1.15, sy * rb * 1.5);
+          ctx.stroke();
+        }
+        ctx.fillStyle = def.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const px = Math.cos(a) * rb * 1.15;
+          const py = Math.sin(a) * rb * 1.15;
+          i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        const pulse = e.bombing ? 0.5 + 0.5 * Math.sin(performance.now() / 60) : 0.4;
+        ctx.fillStyle = `rgba(40,10,6,${0.45 + 0.4 * pulse})`;
+        ctx.beginPath();
+        ctx.arc(0, 0, rb * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // Grunt: segmented beetle — legs, oval body, small head.
+        ctx.strokeStyle = def.color;
+        ctx.lineWidth = 2;
+        for (const sy of [-1, 1]) for (const lx of [-0.5, 0, 0.5]) {
+          ctx.beginPath();
+          ctx.moveTo(lx * rb, sy * rb * 0.6);
+          ctx.lineTo(lx * rb * 1.1, sy * rb * 1.35);
+          ctx.stroke();
+        }
+        ctx.fillStyle = def.color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        ctx.beginPath();
+        ctx.ellipse(0, 0, rb * 1.25, rb * 0.9, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(rb * 1.05, 0, rb * 0.42, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.lineWidth = 1;
+
+      // --- Status / evolution rings (shape-agnostic, around the body) ---
+      const ring = rb * 1.35;
       if (e.climbing) {
-        // Scaling a wall — dashed light outline.
         ctx.strokeStyle = 'rgba(220,220,230,0.95)';
         ctx.lineWidth = 2;
         ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, ring, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.lineWidth = 1;
       } else if (e.slowFactor < 1) {
         ctx.strokeStyle = '#3fd6ff';
         ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, ring, 0, Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
       }
       if (e.bombing) {
-        // Fuse arc filling toward detonation.
         const p = Math.min(1, e.bombTimer / config.bombTime);
         ctx.strokeStyle = 'rgba(255,140,40,0.95)';
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.arc(cx, cy, TILE * 0.4, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
+        ctx.arc(cx, cy, ring + 2, -Math.PI / 2, -Math.PI / 2 + p * Math.PI * 2);
         ctx.stroke();
         ctx.lineWidth = 1;
       }
       if (e.armorType) {
-        // Hardened plating: a heavy ring in the resisted type's colour, with
-        // short radial "plates" so it reads as armour, not another status glow.
+        // Hardened plating in the resisted type's colour.
         const col = ARMOR_COLOR[e.armorType];
-        const r = TILE * (def.radius + 0.16);
+        const r = ring + TILE * 0.05;
         ctx.strokeStyle = col;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
@@ -379,6 +507,15 @@ export class Game {
         }
         ctx.lineWidth = 1;
       }
+      if (world.evolution.seek) {
+        // Crack-sensor: a warm glowing tip at the front.
+        const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 110 + e.id);
+        ctx.fillStyle = `rgba(255,150,60,${0.55 + 0.45 * pulse})`;
+        ctx.beginPath();
+        ctx.arc(cx + hx * rb * 1.5, cy + hy * rb * 1.5, 2.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       const w = TILE * 0.6;
       ctx.fillStyle = '#30363d';
       ctx.fillRect(cx - w / 2, cy - TILE * 0.46, w, 3);
@@ -459,7 +596,29 @@ export class Game {
       }
     }
 
+    this.renderFeed();
     this.renderHud();
+  }
+
+  // Event feed — bottom-left, newest at the bottom, fading as it ages.
+  private renderFeed() {
+    const ctx = this.ctx;
+    const colors: Record<string, string> = { bad: '#f85149', evo: '#f0c43e', good: '#3fb950', info: '#58a6ff' };
+    const lines = this.feed.slice(-7);
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    const baseY = ROWS * TILE - 8;
+    lines.forEach((f, i) => {
+      const fromBottom = lines.length - 1 - i;
+      const y = baseY - fromBottom * 15;
+      ctx.globalAlpha = Math.max(0.12, 1 - f.age / 8);
+      ctx.fillStyle = 'rgba(5,7,10,0.55)';
+      ctx.fillRect(6, y - 12, ctx.measureText(f.msg).width + 8, 14);
+      ctx.fillStyle = colors[f.kind] ?? '#c9d1d9';
+      ctx.fillText(f.msg, 10, y);
+    });
+    ctx.globalAlpha = 1;
   }
 
   private renderHud() {
@@ -519,7 +678,16 @@ export class Game {
       ctx.font = '15px monospace';
       const passed = made ? ` · ★ passed wave ${config.targetWave}` : ` · target was ${config.targetWave}`;
       ctx.fillText(`died on wave ${world.wave} · ${world.kills} kills${passed}`, W / 2, (ROWS * TILE) / 2 + 16);
-      ctx.fillText('press "Reset map" to play again', W / 2, (ROWS * TILE) / 2 + 40);
+      if (this.newBestThisRun) {
+        ctx.fillStyle = '#f0c43e';
+        ctx.font = 'bold 17px monospace';
+        ctx.fillText('★ NEW BEST FOR THIS SEED ★', W / 2, (ROWS * TILE) / 2 + 40);
+      } else if (this.record) {
+        ctx.fillStyle = '#8b949e';
+        ctx.fillText(`seed best: wave ${this.record.bestWave} · ${this.record.bestKills} kills`, W / 2, (ROWS * TILE) / 2 + 40);
+      }
+      ctx.fillStyle = '#c9d1d9';
+      ctx.fillText('press "Reset map" to play again', W / 2, (ROWS * TILE) / 2 + 62);
     }
   }
 
