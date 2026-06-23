@@ -5,6 +5,7 @@ import { config } from './config';
 import { Grid } from './grid';
 import { findPath } from './astar';
 import { Enemy, Tower } from './entities';
+import { World } from './world';
 
 const grid = new Grid();
 
@@ -200,4 +201,19 @@ const sapSec = timeToCollapse(config.pressureRate + config.sapRate);
 console.log(JSON.stringify({ sapSec: +sapSec.toFixed(1), walkSec: +walkSec.toFixed(1) }));
 if (!isFinite(sapSec)) throw new Error('FAIL: sapper never collapsed the tile');
 if (sapSec >= walkSec) throw new Error('FAIL: sapper did not collapse faster than plain walking');
-console.log('SCENARIO 4 (sapper caves in ground faster) PASSED');
+console.log('SCENARIO 4 (sapper caves in ground faster) PASSED\n');
+
+// --- Scenario 5: lane-structured map generation ---------------------------------
+// Every seeded map must be solvable and actually carve some lane structure (rock).
+let solvable = 0;
+let structured = 0;
+const seeds = [1, 7, 42, 100, 2025, 88888];
+for (const seed of seeds) {
+  const w = new World(seed);
+  if (findPath(w.grid, w.grid.spawn, w.grid.exit)) solvable++;
+  if (w.grid.tiles.some((t) => t.rock)) structured++;
+}
+console.log(JSON.stringify({ solvable: `${solvable}/${seeds.length}`, structured: `${structured}/${seeds.length}` }));
+if (solvable < seeds.length) throw new Error('FAIL: a generated lane map was unsolvable');
+if (structured < seeds.length) throw new Error('FAIL: a generated map had no lane structure');
+console.log('SCENARIO 5 (lane map generation) PASSED');

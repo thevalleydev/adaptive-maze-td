@@ -113,12 +113,48 @@ export class World {
   }
 
   private applyGeneration() {
-    if (this.seed === null) return; // classic centered map, no rocks
+    if (this.seed === null) return; // classic centered map, no rocks (sim)
     const rng = new RNG(this.seed);
     const g = this.grid;
-    g.spawn = { x: 0, y: 2 + rng.int(ROWS - 4) };
-    g.exit = { x: COLS - 1, y: 2 + rng.int(ROWS - 4) };
-    const target = Math.floor(ROWS * COLS * config.rockDensity);
+
+    // --- Semi-structured lanes ---
+    // Carve the field into 2–3 broad channels with horizontal rock dividers, each
+    // with a staggered opening, so flow reads as lanes the player can anchor on —
+    // but the channels stay wide enough to still build maze segments and let the
+    // swarm adapt. Lanes as scaffolding, not rails.
+    const lanes = 2 + rng.int(2); // 2 or 3 channels
+    const dividerRows: number[] = [];
+    for (let d = 1; d < lanes; d++) dividerRows.push(Math.round((ROWS * d) / lanes));
+
+    // Spawn/exit sit in channel centres (open ground), not on a divider.
+    const centres: number[] = [];
+    let prev = 0;
+    for (const edge of [...dividerRows, ROWS]) {
+      centres.push(Math.floor((prev + edge) / 2));
+      prev = edge + 1;
+    }
+    g.spawn = { x: 0, y: centres[rng.int(centres.length)] };
+    g.exit = { x: COLS - 1, y: centres[rng.int(centres.length)] };
+
+    const carve = () => {
+      for (const t of g.tiles) t.rock = false;
+      for (const y of dividerRows) {
+        const gapStart = 2 + rng.int(Math.max(1, COLS - 6));
+        const gapW = 2 + rng.int(2); // 2–3 wide opening, staggered per divider
+        for (let x = 1; x < COLS - 1; x++) {
+          if (x >= gapStart && x < gapStart + gapW) continue;
+          const t = g.at(x, y);
+          if (t && !g.isSpawnOrExit(x, y) && !this.nearSpawn(x, y)) t.rock = true;
+        }
+      }
+    };
+    carve();
+    // Guarantee solvable — re-roll gap positions a few times, else open the map.
+    for (let tries = 0; tries < 8 && !findPath(g, g.spawn, g.exit); tries++) carve();
+    if (!findPath(g, g.spawn, g.exit)) for (const t of g.tiles) t.rock = false;
+
+    // Light texture scatter inside the channels (keeps lanes the dominant shape).
+    const target = Math.floor(ROWS * COLS * config.rockDensity * 0.4);
     let placed = 0;
     let attempts = 0;
     while (placed < target && attempts < target * 12) {
@@ -130,7 +166,7 @@ export class World {
       if (g.isSpawnOrExit(x, y) || this.nearSpawn(x, y)) continue;
       t.rock = true;
       if (!findPath(g, g.spawn, g.exit)) {
-        t.rock = false; // keep the map solvable
+        t.rock = false;
         continue;
       }
       placed++;
