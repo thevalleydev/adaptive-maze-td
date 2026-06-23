@@ -24,6 +24,8 @@ export class Game {
   onSeedChange?: (seed: number | null) => void;
   learnBanner = '';
   learnTimer = 0;
+  // Rolling event feed (drained from world.events) — the "what just happened" log.
+  private feed: { msg: string; kind: string; age: number }[] = [];
 
   // --- Score DB ---
   record: scores.Record | null = null; // this seed's best, from the score server
@@ -172,6 +174,11 @@ export class Game {
       this.learnTimer = 3.5;
     }
     if (this.learnTimer > 0) this.learnTimer -= dt;
+    // Drain world events into the rolling feed; age out after ~8s.
+    for (const ev of this.world.events) this.feed.push({ msg: ev.msg, kind: ev.kind, age: 0 });
+    for (const f of this.feed) f.age += dt;
+    if (this.feed.length > 60) this.feed = this.feed.slice(-30);
+    this.feed = this.feed.filter((f) => f.age < 8);
     if (this.world.gameOver && !this.runRecorded) {
       this.runRecorded = true;
       this.recordRun();
@@ -589,7 +596,29 @@ export class Game {
       }
     }
 
+    this.renderFeed();
     this.renderHud();
+  }
+
+  // Event feed — bottom-left, newest at the bottom, fading as it ages.
+  private renderFeed() {
+    const ctx = this.ctx;
+    const colors: Record<string, string> = { bad: '#f85149', evo: '#f0c43e', good: '#3fb950', info: '#58a6ff' };
+    const lines = this.feed.slice(-7);
+    ctx.font = '12px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    const baseY = ROWS * TILE - 8;
+    lines.forEach((f, i) => {
+      const fromBottom = lines.length - 1 - i;
+      const y = baseY - fromBottom * 15;
+      ctx.globalAlpha = Math.max(0.12, 1 - f.age / 8);
+      ctx.fillStyle = 'rgba(5,7,10,0.55)';
+      ctx.fillRect(6, y - 12, ctx.measureText(f.msg).width + 8, 14);
+      ctx.fillStyle = colors[f.kind] ?? '#c9d1d9';
+      ctx.fillText(f.msg, 10, y);
+    });
+    ctx.globalAlpha = 1;
   }
 
   private renderHud() {

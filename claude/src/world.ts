@@ -73,6 +73,10 @@ export class World {
   evolution = { climb: false, bomb: false, frustration: 0, armor: null as DamageType | null, seek: false };
   justLearned: 'climb' | 'bomb' | 'armor' | 'seek' | null = null; // set the frame an ability is learned (UI banner)
   collapseExposure = 0; // collapses the player has caused — drives crack-seeking
+
+  // Per-frame event buffer (drained by the presentation layer into the event
+  // feed). Purely observational — keeps the deterministic core/sim unaffected.
+  events: { msg: string; kind: 'bad' | 'evo' | 'good' | 'info' }[] = [];
   // Damage dealt per type since the last armor adaptation. When one type both
   // crosses the threshold AND dominates, the swarm hardens against it; the tally
   // then resets so the next over-reliance is measured fresh.
@@ -228,23 +232,29 @@ export class World {
     if (!this.evolution.seek) {
       this.evolution.seek = true;
       this.justLearned = 'seek';
+      this.events.push({ msg: 'The swarm learned to EXPLOIT CRACKS', kind: 'evo' });
     }
   }
   private learnClimb() {
     if (!this.evolution.climb) {
       this.evolution.climb = true;
       this.justLearned = 'climb';
+      this.events.push({ msg: 'The swarm learned to CLIMB walls', kind: 'evo' });
     }
   }
   private learnBomb() {
     if (!this.evolution.bomb) {
       this.evolution.bomb = true;
       this.justLearned = 'bomb';
+      this.events.push({ msg: 'The swarm learned to BOMB walls', kind: 'evo' });
     }
   }
   private bombStructure(x: number, y: number) {
     const i = this.towers.findIndex((t) => t.x === x && t.y === y);
-    if (i !== -1) this.towers.splice(i, 1); // bombed = no salvage; defend it or lose it
+    if (i !== -1) {
+      this.events.push({ msg: `A Brute breached your ${TOWER_DEFS[this.towers[i].kind].name}`, kind: 'bad' });
+      this.towers.splice(i, 1); // bombed = no salvage; defend it or lose it
+    }
     this.grid.setBlocked(x, y, false);
   }
 
@@ -265,6 +275,7 @@ export class World {
     if (this.evolution.armor !== top) {
       this.evolution.armor = top;
       this.justLearned = 'armor';
+      this.events.push({ msg: `Swarm hardened vs ${top} — diversify your damage`, kind: 'evo' });
     }
     for (const t of DAMAGE_TYPES) this.dmgByType[t] = 0; // re-measure the next over-reliance
   }
@@ -272,6 +283,7 @@ export class World {
   // --- Player level-ups -----------------------------------------------------
   private grantLevelUp() {
     this.awaitingLevelUp = true;
+    this.events.push({ msg: '★ Level up — choose a reward', kind: 'good' });
     const rng = new RNG((this.seed ?? 1) ^ ((this.levelUpsTaken + 1) * 0x9e3779b1));
     const pool: LevelUpOption[] = [];
     for (const k of ['gun', 'frost', 'cannon', 'sniper'] as TowerKind[]) {
@@ -336,6 +348,7 @@ export class World {
     this.evolution = { climb: false, bomb: false, frustration: 0, armor: null, seek: false };
     this.justLearned = null;
     this.collapseExposure = 0;
+    this.events = [];
     this.dmgByType = { kinetic: 0, blast: 0, frost: 0 };
     this.statMod = makeMods();
     this.costMod = makeMods();
@@ -378,6 +391,7 @@ export class World {
   update(dt: number) {
     if (this.gameOver) return; // only death ends the run; the target is endless beyond
     this.justLearned = null;
+    this.events.length = 0;
 
     // Sim only runs once the player hits Start (prep phase before that). Preview
     // still recomputes below so building during prep updates the route.
@@ -410,7 +424,10 @@ export class World {
         // then queue the next wave (the run only ends on death).
         this.waveActive = false;
         this.grid.dissipate(config.betweenWaveDecay);
-        if (this.wave >= config.targetWave) this.reachedTarget = true;
+        if (this.wave >= config.targetWave && !this.reachedTarget) {
+          this.reachedTarget = true;
+          this.events.push({ msg: `★ Target wave ${config.targetWave} cleared — endless now`, kind: 'good' });
+        }
         if (this.wave % config.levelUpEvery === 0) this.grantLevelUp();
         this.betweenTimer = config.interWaveTime;
       }
@@ -485,6 +502,7 @@ export class World {
         }
       } else if (e.leaked) {
         this.leaks++;
+        this.events.push({ msg: `A ${ENEMY_DEFS[e.kind].name} reached the exit (−1 ♥)`, kind: 'bad' });
         if (--this.lives <= 0) {
           this.lives = 0;
           this.gameOver = true;

@@ -120,7 +120,7 @@ export const config: Config = {
 
   spawnBuffer: 2,
   killRewardMult: 1,
-  towerCostGrowth: 0.03, // gentle now: HP-ramp/armor/evolution carry the anti-snowball job
+  towerCostGrowth: 0, // flat per-kind cost — HP-ramp/armor/evolution carry the anti-snowball job
 
   maxTowerLevel: 3,
   upgradeCostMult: 0.9,
@@ -140,8 +140,8 @@ export const config: Config = {
   armorDominance: 0.6,
 
   levelUpEvery: 5,
-  levelUpDiscount: 0.85,
-  levelUpBuff: 1.25,
+  levelUpDiscount: 0.8, // -20% cost per pick
+  levelUpBuff: 1.4, // +40% damage per pick — leveling should feel like real power
 };
 
 // View toggles (not part of the tuning model, but live).

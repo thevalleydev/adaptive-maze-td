@@ -181,6 +181,7 @@ export function buildPanel(panel: HTMLElement, game: Game) {
       `leaks    ${game.leaks}\n` +
       `towers   ${game.towers.length}\n` +
       `creeps   ${creeps}\n` +
+      `upgrades ${upgradeSummary(game)}\n` +
       `record   ${game.record ? `wave ${game.record.bestWave} · ${game.record.runs} runs` : '—'}\n` +
       `fps      ${game.fps.toFixed(0)}`;
   };
@@ -193,4 +194,18 @@ function bindToggle(panel: HTMLElement, sel: string, set: (v: boolean) => void) 
 
 function fmt(v: number) {
   return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+// Net level-up mods the player currently holds, per tower kind.
+function upgradeSummary(game: Game): string {
+  const parts: string[] = [];
+  for (const k of TOWER_ORDER) {
+    const s = game.world.statMod[k];
+    const c = game.world.costMod[k];
+    const bits: string[] = [];
+    if (s > 1) bits.push(`+${Math.round((s - 1) * 100)}%dmg`);
+    if (c < 1) bits.push(`-${Math.round((1 - c) * 100)}%$`);
+    if (bits.length) parts.push(`${TOWER_DEFS[k].name} ${bits.join(' ')}`);
+  }
+  return parts.length ? parts.join(' · ') : 'none yet';
 }
