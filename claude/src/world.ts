@@ -441,13 +441,19 @@ export class World {
 
     const adapt = view.enemyAdaptation;
 
-    // A collapse wrecks nearby structures — towers within 1 tile, WALLS within 2.
-    if (view.collapseWrecksTowers && this.grid.justCollapsed.length) {
+    // Tower-destroying collapse is the SWARM'S weapon, not an ambient grind: it
+    // only happens once creeps have learned to seek/sap (weaponize cracks).
+    // Before that, collapse just reroutes the path. Keeps difficulty to two clear
+    // authors — they get tougher, and they adapt to you.
+    if (view.collapseWrecksTowers && this.evolution.seek && this.grid.justCollapsed.length) {
       for (const ct of this.grid.justCollapsed) {
         for (const tw of [...this.towers]) {
           const md = Math.abs(tw.x - ct.x) + Math.abs(tw.y - ct.y);
           const reach = TOWER_DEFS[tw.kind].structural ? 2 : 1;
-          if (md <= reach) this.destroyTowerAt(tw.x, tw.y);
+          if (md <= reach) {
+            this.events.push({ msg: `The swarm caved in your ${TOWER_DEFS[tw.kind].name}`, kind: 'bad' });
+            this.destroyTowerAt(tw.x, tw.y);
+          }
         }
       }
     }
