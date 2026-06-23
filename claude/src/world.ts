@@ -240,9 +240,9 @@ export class World {
   private destroyTowerAt(x: number, y: number) {
     const i = this.towers.findIndex((t) => t.x === x && t.y === y);
     if (i === -1) return;
-    // Salvage: a wrecked tower refunds half its base cost so a collapse costs
+    // Salvage: a wrecked tower refunds part of its base cost so a collapse costs
     // you your *position*, not your whole economy.
-    this.money += Math.floor(TOWER_DEFS[this.towers[i].kind].cost * 0.5);
+    this.money += Math.floor(TOWER_DEFS[this.towers[i].kind].cost * config.salvageRefund);
     this.towers.splice(i, 1);
     this.grid.setBlocked(x, y, false);
   }
@@ -288,8 +288,10 @@ export class World {
   private bombStructure(x: number, y: number) {
     const i = this.towers.findIndex((t) => t.x === x && t.y === y);
     if (i !== -1) {
-      this.events.push({ msg: `A Brute breached your ${TOWER_DEFS[this.towers[i].kind].name}`, kind: 'bad' });
-      this.towers.splice(i, 1); // bombed = no salvage; defend it or lose it
+      const kind = this.towers[i].kind;
+      this.events.push({ msg: `A Brute breached your ${TOWER_DEFS[kind].name}`, kind: 'bad' });
+      this.money += Math.floor(TOWER_DEFS[kind].cost * config.salvageRefund); // salvage so it's not a death spiral
+      this.towers.splice(i, 1);
     }
     this.grid.setBlocked(x, y, false);
   }
@@ -460,6 +462,11 @@ export class World {
         // then queue the next wave (the run only ends on death).
         this.waveActive = false;
         this.grid.dissipate(config.betweenWaveDecay);
+        // Wave-clear stipend (scales with wave) — guaranteed rebuild fuel so losing
+        // towers to the swarm doesn't spiral into bankruptcy.
+        const income = Math.round(config.waveIncome * (1 + this.wave * 0.12));
+        this.money += income;
+        this.events.push({ msg: `Wave ${this.wave} cleared — +$${income}`, kind: 'good' });
         if (this.wave >= config.targetWave && !this.reachedTarget) {
           this.reachedTarget = true;
           this.events.push({ msg: `★ Target wave ${config.targetWave} cleared — endless now`, kind: 'good' });

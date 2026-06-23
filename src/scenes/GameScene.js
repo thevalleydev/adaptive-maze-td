@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import {
   COLS, ROWS, TILE, UI_W, W, H,
-  SPAWN, EXIT, PRESSURE, ECONOMY, WAVE, TOWERS, ENEMY, MASTER, CREEP_TYPES,
+  SPAWN, EXIT, PRESSURE, ECONOMY, WAVE, TOWERS, ENEMY, MASTER, CREEP_TYPES, UPGRADE_BRANCHES,
 } from '../config.js';
 import { Grid, TileType } from '../systems/Grid.js';
 import { Pathfinder }     from '../systems/Pathfinder.js';
@@ -41,6 +41,7 @@ export class GameScene extends Phaser.Scene {
     this.spawnTimer   = 0;
     this.nextEnemyId  = 0;
     this.gameRunning  = true;
+    this._bleedTimer  = 0;   // in-wave pressure bleed timer
 
     // Kill tracker — reset each wave, used by Creep Master AI
     this.waveKills = { basic: 0, sniper: 0, slow: 0 };
@@ -113,10 +114,12 @@ export class GameScene extends Phaser.Scene {
     this.add.text(px, 204, 'TOWERS', { fontSize: '10px', fill: '#556677' });
     this.btnBasic  = this._btn(px, 216, `[1] 🔧 Basic  $${TOWERS.basic.cost}`,  '#4488ff', '#0d1e33',
       () => this._selectTowerType('basic'));
-    this.btnSniper = this._btn(px, 250, `[2] 🎯 Sniper $${TOWERS.sniper.cost}`, '#44cc44', '#0d2211',
+    this.btnSniper = this._btn(px, 244, `[2] 🎯 Sniper $${TOWERS.sniper.cost}`, '#44cc44', '#0d2211',
       () => this._selectTowerType('sniper'));
-    this.btnSlow   = this._btn(px, 284, `[3] ❄  Slow   $${TOWERS.slow.cost}`,  '#88aaff', '#0d1030',
+    this.btnSlow   = this._btn(px, 272, `[3] ❄  Slow   $${TOWERS.slow.cost}`,  '#88aaff', '#0d1030',
       () => this._selectTowerType('slow'));
+    this.btnVent   = this._btn(px, 300, `[4] 💨 Vent   $${TOWERS.vent.cost}`,  '#44ffcc', '#0a2020',
+      () => this._selectTowerType('vent'));
 
     divider(320);
     this.btnDemol  = this._btn(px, 325, '[D] 🔨 Demolish',   '#ff8844', '#2a1000',
@@ -165,8 +168,10 @@ export class GameScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-ONE',   () => this._selectTowerType('basic'));
     this.input.keyboard.on('keydown-TWO',   () => this._selectTowerType('sniper'));
     this.input.keyboard.on('keydown-THREE', () => this._selectTowerType('slow'));
+    this.input.keyboard.on('keydown-FOUR',  () => this._selectTowerType('vent'));
     this.input.keyboard.on('keydown-D',     () => this._toggleDemolish());
-    this.input.keyboard.on('keydown-U',     () => this._upgradeHoveredTower());
+    this.input.keyboard.on('keydown-U',     () => this._upgradeHoveredTower('A'));
+    this.input.keyboard.on('keydown-I',     () => this._upgradeHoveredTower('B'));
     this.input.keyboard.on('keydown-ESC', () => {
       if (this.placingTower) { this.placingTower = false; this._highlightTowerButtons(); this._setStatus(''); this.txtMode.setText(''); }
       else if (this.demolishMode) this._toggleDemolish();
@@ -194,8 +199,8 @@ export class GameScene extends Phaser.Scene {
 
   /** Highlight the active tower-type button; dim the others. */
   _highlightTowerButtons() {
-    const map = { basic: this.btnBasic, sniper: this.btnSniper, slow: this.btnSlow };
-    const colors = { basic: '#4488ff', sniper: '#44cc44', slow: '#88aaff' };
+    const map    = { basic: this.btnBasic, sniper: this.btnSniper, slow: this.btnSlow, vent: this.btnVent };
+    const colors = { basic: '#4488ff', sniper: '#44cc44', slow: '#88aaff', vent: '#44ffcc' };
     for (const [type, btn] of Object.entries(map)) {
       const active = this.placingTower && this.selectedTowerType === type;
       btn.setStyle({ fill: active ? '#ffff44' : colors[type] });
@@ -224,6 +229,7 @@ export class GameScene extends Phaser.Scene {
   /** One-line stat summary for a tower type. */
   _towerStatLine(type) {
     const cfg = TOWERS[type];
+    if (type === 'vent') return `Range ${cfg.range}px  Drains ${cfg.ventDrain} pressure/tile every ${cfg.ventInterval/1000}s`;
     const base = `Dmg ${cfg.damage}  Range ${cfg.range}px  ${cfg.fireRate}/s`;
     if (type === 'slow') return base + '  Slows on hit';
     return base;
@@ -235,8 +241,8 @@ export class GameScene extends Phaser.Scene {
     this.demolishMode = !this.demolishMode;
     this.btnDemol.setStyle({ fill: this.demolishMode ? '#ffff44' : '#ff8844' });
     if (this.demolishMode) {
-      this._setStatus('Demolish mode:\nClick tower → sell (50% refund)\nClick collapsed → clear tile');
-      this.txtMode.setText('🔨  DEMOLISH — orange tiles can be removed  ·  ESC to cancel')
+      this._setStatus(`Demolish mode:\nOrange → sell tower (50% refund)\nOrange → clear collapsed tile\nBlue → repair cracked ($${ECONOMY.REPAIR_COST}, mid-wave only)`);
+      this.txtMode.setText('🔨  DEMOLISH — orange=remove  blue=repair  ·  ESC to cancel')
         .setStyle({ fill: '#ffaa44' });
     } else {
       this._setStatus('');
@@ -250,15 +256,31 @@ export class GameScene extends Phaser.Scene {
     if (!this.showPressure) this.gPressure.clear();
   }
 
-  _upgradeHoveredTower() {
+  _upgradeHoveredTower(branch = null) {
     const t = this.towers.find(t => t.col === this.hovCol && t.row === this.hovRow);
     if (!t) return;
+
+    // At level 3 the player must choose a branch before upgrading further
+    if (t.needsBranch()) {
+      if (!branch) return; // just hover — info shown in HUD
+      const cost = t.branchCost();
+      if (this.gold < cost) { this._setStatus(`💰 Need $${cost} to specialize!`); return; }
+      this.gold -= cost;
+      t.chooseBranch(branch);
+      const name = UPGRADE_BRANCHES[t.type]?.[branch]?.name ?? 'Specialized';
+      this._notify(`✨ ${name} unlocked!`, 2000);
+      this._refreshHUD();
+      return;
+    }
+
     const cost = t.upgradeCost();
     if (cost === null) { this._setStatus('Already max level!'); return; }
     if (this.gold < cost) { this._setStatus(`💰 Need $${cost} to upgrade!`); return; }
     this.gold -= cost;
     t.upgrade();
-    this._notify(`⬆ ${TOWERS[t.type].label} → Lv${t.level}!`, 1500);
+    const label = TOWERS[t.type].label + (t.branch ? ` (${t.branch})` : '');
+    this._notify(`⬆ ${label} → Lv${t.level}!`, 1500);
+    this._refreshHUD();
   }
 
   _setStatus(msg) { this.txtStatus.setText(msg); }
@@ -279,6 +301,21 @@ export class GameScene extends Phaser.Scene {
     } else {
       this.txtEnemies.setText('');
     }
+
+    // Show hovered tile info so pressure values are always legible
+    const cell = this.grid.get(this.hovCol, this.hovRow);
+    if (cell && !this.placingTower && !this.demolishMode) {
+      const p = Math.round(cell.pressure);
+      if (p > 0) {
+        const state = cell.type === TileType.COLLAPSED ? 'COLLAPSED'
+                    : cell.type === TileType.CRACKED   ? 'Cracked'
+                    : cell.type === TileType.TOWER     ? 'Tower'
+                    : 'Normal';
+        this._setStatus(`Tile (${this.hovCol},${this.hovRow})\nPressure: ${p}/100 — ${state}\nCracks at ${PRESSURE.CRACK_AT}, collapses at ${PRESSURE.COLLAPSE_AT}`);
+      } else if (p === 0 && cell.type === TileType.NORMAL) {
+        this._setStatus('');
+      }
+    }
   }
 
   // ── Wave management ───────────────────────────────────────────────────────
@@ -294,6 +331,7 @@ export class GameScene extends Phaser.Scene {
     this.pendingBomber = this.masterState.escalation >= 2;
     if (this.pendingBomber) this.pendingSpawn++;  // bomber is the last enemy
     this.spawnTimer = 0;
+    this._bleedTimer = 0;
     this.btnWave.setStyle({ fill: '#556655' });
 
     // Pre-wave announcement
@@ -340,7 +378,7 @@ export class GameScene extends Phaser.Scene {
     const heatBuildup    = (slowPressure     / 100) * MASTER.HEAT_MAX    * H;
     const evasionBuildup = (sniperPressure   / 100) * MASTER.EVASION_MAX * H;
 
-    const e = new Enemy(this.nextEnemyId++, this.path, TILE, {
+    const e = new Enemy(this.nextEnemyId++, this.pf.find(SPAWN.col, SPAWN.row, EXIT.col, EXIT.row, PRESSURE.PATH_JITTER) ?? this.path, TILE, {
       speed:           (ENEMY.BASE_SPEED + waveNum * ENEMY.SPEED_INCR) * typeCfg.speedMult,
       hp:              (ENEMY.BASE_HP    + waveNum * ENEMY.HP_INCR)    * typeCfg.hpMult,
       pressurePerStep: PRESSURE.PER_STEP * (1 + (waveNum - 1) * ENEMY.PRESSURE_SCALE) * typeCfg.pressureMult,
@@ -477,7 +515,7 @@ export class GameScene extends Phaser.Scene {
   _spawnBomber() {
     if (!this.path?.length) return;
     const waveNum = this.wave;
-    const e = new Enemy(this.nextEnemyId++, this.path, TILE, {
+    const e = new Enemy(this.nextEnemyId++, this.pf.find(SPAWN.col, SPAWN.row, EXIT.col, EXIT.row, PRESSURE.PATH_JITTER) ?? this.path, TILE, {
       speed:           (ENEMY.BASE_SPEED + waveNum * ENEMY.SPEED_INCR) * MASTER.BOMBER_SPEED_MULT,
       hp:              (ENEMY.BASE_HP    + waveNum * ENEMY.HP_INCR)    * MASTER.BOMBER_HP_MULT,
       pressurePerStep: PRESSURE.PER_STEP * 2,
@@ -525,21 +563,13 @@ export class GameScene extends Phaser.Scene {
   }
 
   _repath() {
-    let p = this.pf.find(SPAWN.col, SPAWN.row, EXIT.col, EXIT.row);
+    const p = this.pf.find(SPAWN.col, SPAWN.row, EXIT.col, EXIT.row);
 
-    // If a collapse just sealed the only path, revert the blocking tile(s) to
-    // cracked so the game never permanently deadlocks. The tile stays at high
-    // pressure and cost — it still hurts, just doesn't fully seal.
+    // If collapse sealed the only path, let it stay sealed — the player
+    // must use Demolish to clear rubble and reopen the route.
+    // _startWave() already refuses to launch if path is null.
     if (!p && this.path) {
-      for (const node of this.path) {
-        const cell = this.grid.get(node.x, node.y);
-        if (cell?.type === TileType.COLLAPSED) {
-          cell.type     = TileType.CRACKED;
-          cell.pressure = PRESSURE.COLLAPSE_AT - 1; // keep near-collapse pressure
-        }
-      }
-      p = this.pf.find(SPAWN.col, SPAWN.row, EXIT.col, EXIT.row);
-      if (p) this._notify('⚠ Critical path held — barely standing!', 2800);
+      this._setStatus('⚠ Path blocked by collapse!\nUse 🔨 Demolish to clear rubble.');
     }
 
     this.path = p;
@@ -547,29 +577,35 @@ export class GameScene extends Phaser.Scene {
   }
 
   /**
-   * Compute an individual A* path from this enemy's current tile to the exit
-   * and hand it to the enemy. This prevents enemies from cutting through newly
-   * placed towers or collapsed tiles to reach a global path.
+   * Compute an individual A* path from this enemy's current tile to the exit.
+   * If no path exists (fully walled off), the enemy enters breach mode —
+   * they walk straight to the exit ignoring the grid entirely.
    */
   _repathEnemy(enemy) {
+    if (enemy.breaching) return; // already breaching, nothing to do
+
     const tx = Math.floor(enemy.wx / TILE);
     const ty = Math.floor(enemy.wy / TILE);
 
-    // Try pathing directly from the enemy's current tile
-    let p = this.pf.find(tx, ty, EXIT.col, EXIT.row);
+    // Try pathing from the enemy's current tile
+    let p = this.pf.find(tx, ty, EXIT.col, EXIT.row, PRESSURE.PATH_JITTER);
 
     if (!p) {
-      // Current tile may be impassable (just collapsed / tower placed on it).
-      // Try the four cardinal neighbours to find a walkable escape tile.
+      // Current tile may be impassable — try cardinal neighbours
       for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-        p = this.pf.find(tx + dx, ty + dy, EXIT.col, EXIT.row);
+        p = this.pf.find(tx + dx, ty + dy, EXIT.col, EXIT.row, PRESSURE.PATH_JITTER);
         if (p) break;
       }
     }
 
-    if (p) enemy.repath(p);
-    // If still no path, the enemy is fully trapped — leave their current path
-    // in place; the anti-deadlock logic in _repath() will handle it.
+    if (p) {
+      enemy.breaching = false;
+      enemy.repath(p);
+    } else {
+      // No path at all — enemy breaches straight to exit
+      enemy.breaching = true;
+      this._notify('💀 BREACH! Enemy cutting through!', 2000);
+    }
   }
 
   _waveEnd() {
@@ -637,6 +673,26 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
+    if (cell.type === TileType.CRACKED) {
+      // Repair only works mid-wave — between waves you have unlimited time, which
+      // makes repair trivially overpowered (player just restores everything for free).
+      if (!this.waveActive) {
+        this._setStatus(`Repairs only work\nduring active waves!\n($${ECONOMY.REPAIR_COST}/tile)`);
+        return;
+      }
+      if (this.gold < ECONOMY.REPAIR_COST) {
+        this._setStatus(`💰 Need $${ECONOMY.REPAIR_COST} to repair.`);
+        return;
+      }
+      this.gold     -= ECONOMY.REPAIR_COST;
+      cell.type      = TileType.NORMAL;
+      cell.pressure  = 0;
+      this._repath();
+      this._refreshHUD();
+      this._setStatus(`Tile repaired. -$${ECONOMY.REPAIR_COST}`);
+      return;
+    }
+
     this._setStatus('Nothing to demolish here.');
   }
 
@@ -687,6 +743,50 @@ export class GameScene extends Phaser.Scene {
         this._spawnEnemy();
         this.pendingSpawn--;
         this.spawnTimer = WAVE.SPAWN_DELAY;
+      }
+    }
+
+    // ── In-wave pressure bleed: unused tiles slowly recover ─────────────────
+    if (this.waveActive) {
+      this._bleedTimer += delta;
+      if (this._bleedTimer >= PRESSURE.BLEED_INTERVAL) {
+        this.grid.bleedPressure(PRESSURE.BLEED_RATE);
+        this._bleedTimer = 0;
+      }
+    }
+
+    // ── Vent towers: drain pressure from tiles in range ──────────────────────
+    for (const t of this.towers) {
+      if (t.type !== 'vent') continue;
+      // Use per-tower ventDrain/ventInterval (may be overridden by branch)
+      const drain    = t.ventDrain    ?? TOWERS.vent.ventDrain;
+      const interval = t.ventInterval ?? TOWERS.vent.ventInterval;
+      t.ventTimer = (t.ventTimer ?? 0) + delta;
+      if (t.ventTimer >= interval) {
+        t.ventTimer = 0;
+        const cx = Math.round(t.wx / TILE), cy = Math.round(t.wy / TILE);
+        const tileRadius = Math.ceil(t.range / TILE);
+        for (let dy = -tileRadius; dy <= tileRadius; dy++) {
+          for (let dx = -tileRadius; dx <= tileRadius; dx++) {
+            if (dx * dx + dy * dy > (t.range / TILE) ** 2) continue;
+            const cell = this.grid.get(cx + dx, cy + dy);
+            if (cell && cell.pressure > 0) {
+              cell.pressure = Math.max(0, cell.pressure - drain);
+              if (cell.type === TileType.CRACKED && cell.pressure < PRESSURE.CRACK_AT * 0.45) {
+                cell.type = TileType.NORMAL;
+              }
+            }
+          }
+        }
+        // Shockwave branch: deal damage to enemies in range on each vent tick
+        if (t.ventDamage > 0) {
+          for (const e of this.enemies) {
+            if (e.dead || e.reached) continue;
+            if (Math.hypot(e.wx - t.wx, e.wy - t.wy) <= t.range) {
+              e.takeDamage(t.ventDamage, 'physical');
+            }
+          }
+        }
       }
     }
 
@@ -742,7 +842,9 @@ export class GameScene extends Phaser.Scene {
     this.shots = [];
     for (const t of this.towers) {
       const shot = t.update(delta, this.enemies);
-      if (shot) this.shots.push(shot);
+      if (!shot) continue;
+      if (Array.isArray(shot)) this.shots.push(...shot);
+      else this.shots.push(shot);
     }
 
     // Collect gold for enemies killed this frame; tally kill type for Creep Master
@@ -828,6 +930,7 @@ export class GameScene extends Phaser.Scene {
 
         const isPlaceable    = cell.type === TileType.NORMAL || cell.type === TileType.CRACKED;
         const isDemolishable = cell.type === TileType.TOWER  || cell.type === TileType.COLLAPSED;
+        const isRepairable   = cell.type === TileType.CRACKED;
 
         // ── Zone tinting: show the entire interactive area at a glance ─────
         if (this.placingTower && isPlaceable) {
@@ -838,24 +941,29 @@ export class GameScene extends Phaser.Scene {
           g.fillStyle(0xff8800, 0.18);
           g.fillRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
         }
+        if (this.demolishMode && isRepairable) {
+          g.fillStyle(0x44aaff, 0.18);
+          g.fillRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+        }
 
         // ── Hover feedback ────────────────────────────────────────────────
         const isHov = isHovInGrid && x === this.hovCol && y === this.hovRow;
         if (!isHov) continue;
 
         if (this.placingTower) {
-          const canPlace = isPlaceable && this.gold >= ECONOMY.TOWER_COST;
+          const canPlace = isPlaceable && this.gold >= (TOWERS[this.selectedTowerType]?.cost ?? ECONOMY.TOWER_COST);
           const hc = canPlace ? 0x44ff44 : 0xff2222;
           g.fillStyle(hc, 0.35);
           g.fillRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
           g.lineStyle(2, hc, 1);
           g.strokeRect(x * TILE + 2, y * TILE + 2, TILE - 4, TILE - 4);
         } else if (this.demolishMode) {
-          const hc = isDemolishable ? 0xff8800 : 0x555555;
-          g.fillStyle(hc, isDemolishable ? 0.40 : 0.15);
+          const isActive = isDemolishable || isRepairable;
+          const hc = isDemolishable ? 0xff8800 : isRepairable ? 0x44aaff : 0x555555;
+          g.fillStyle(hc, isActive ? 0.40 : 0.15);
           g.fillRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
-          if (isDemolishable) {
-            g.lineStyle(2, 0xff8800, 1);
+          if (isActive) {
+            g.lineStyle(2, hc, 1);
             g.strokeRect(x * TILE + 2, y * TILE + 2, TILE - 4, TILE - 4);
           }
         }
@@ -959,6 +1067,24 @@ export class GameScene extends Phaser.Scene {
         g.lineStyle(1, 0x8899ff, isHov ? 0.50 : 0.14);
         g.strokeCircle(t.wx, t.wy, t.range);
 
+      } else if (t.type === 'vent') {
+        // Vent tower — teal, pulsing ring that shows pressure drain at work
+        g.lineStyle(1.5, 0x22aa88, 0.60);
+        g.strokeRect(px + 2, py + 2, TILE - 4, TILE - 4);
+        g.fillStyle(0x0d2a22, 1);
+        g.fillRect(px + 5, py + 5, TILE - 10, TILE - 10);
+        // Breathing core
+        const ventPhase = ((Date.now() - (t.ventTimer ?? 0)) % TOWERS.vent.ventInterval) / TOWERS.vent.ventInterval;
+        const pulse = 0.5 + 0.5 * Math.sin(ventPhase * Math.PI * 2);
+        g.fillStyle(0x44ffcc, 0.30 + pulse * 0.50);
+        g.fillCircle(cx, cy, hw - 6 + pulse * 4);
+        // Expanding drain ring (grows from center on each tick)
+        g.lineStyle(1.5, 0x44ffcc, (1 - ventPhase) * 0.60);
+        g.strokeCircle(cx, cy, ventPhase * t.range);
+        // Always-visible range ring
+        g.lineStyle(1, 0x44ffcc, isHov ? 0.55 : 0.18);
+        g.strokeCircle(t.wx, t.wy, t.range);
+
       } else {
         g.lineStyle(1.5, 0x3366aa, 0.5);
         g.strokeRect(px + 2, py + 2, TILE - 4, TILE - 4);
@@ -968,8 +1094,8 @@ export class GameScene extends Phaser.Scene {
         g.strokeCircle(t.wx, t.wy, t.range);
       }
 
-      // ── Rotating barrel (Basic & Sniper) ─────────────────────────────────
-      if (t.type !== 'slow') {
+      // ── Rotating barrel (Basic & Sniper only) ────────────────────────────
+      if (t.type !== 'slow' && t.type !== 'vent') {
         const barrelLen  = t.type === 'sniper' ? hw - 1 : hw - 3;
         const barrelW    = t.type === 'sniper' ? 3 : 5;
         const barrelColor = t.type === 'sniper' ? 0x44aa44 : 0x6699cc;
@@ -1002,17 +1128,19 @@ export class GameScene extends Phaser.Scene {
         }
       }
 
-      // ── Hub dot (drawn on top of barrel) ─────────────────────────────────
-      const hubColor  = t.type === 'sniper' ? 0x88ee88 : t.type === 'slow' ? 0xaabbff : 0xaaddff;
-      const hubBg     = t.type === 'sniper' ? 0x1a2e1a : t.type === 'slow' ? 0x141830 : 0x1e3a5a;
-      g.fillStyle(hubColor, 1);
-      g.fillCircle(cx, cy, 5);
-      g.fillStyle(hubBg, 1);
-      g.fillCircle(cx, cy, 2);
+      // ── Hub dot (drawn on top of barrel) — skip for vent (has its own core) ─
+      if (t.type !== 'vent') {
+        const hubColor = t.type === 'sniper' ? 0x88ee88 : t.type === 'slow' ? 0xaabbff : 0xaaddff;
+        const hubBg    = t.type === 'sniper' ? 0x1a2e1a : t.type === 'slow' ? 0x141830 : 0x1e3a5a;
+        g.fillStyle(hubColor, 1);
+        g.fillCircle(cx, cy, 5);
+        g.fillStyle(hubBg, 1);
+        g.fillCircle(cx, cy, 2);
+      }
 
       // ── Upgrade level pips (bottom-centre of tile) ────────────────────────
       if (t.level > 1) {
-        const pipColor = t.type === 'sniper' ? 0x88ee88 : t.type === 'slow' ? 0xaabbff : 0xaaddff;
+        const pipColor = t.type === 'sniper' ? 0x88ee88 : t.type === 'slow' ? 0xaabbff : t.type === 'vent' ? 0x44ffcc : 0xaaddff;
         const pips = t.level - 1;
         const spacing = 6;
         const startX = cx - (pips - 1) * spacing / 2;
@@ -1026,14 +1154,31 @@ export class GameScene extends Phaser.Scene {
     // ── Hovered tower info ────────────────────────────────────────────────
     if (hoveredTower && !this.placingTower && !this.demolishMode) {
       const cfg      = TOWERS[hoveredTower.type];
-      const sell     = Math.floor(TOWERS[hoveredTower.type].cost * 0.5 * hoveredTower.level);
-      const upCost   = hoveredTower.upgradeCost();
-      const upLine   = upCost !== null ? `[U] Upgrade: $${upCost}` : 'Max level ★★★';
-      const slowLine = hoveredTower.type === 'slow' ? '  Slows on hit' : '';
+      const sell     = Math.floor(cfg.cost * 0.5 * hoveredTower.level);
+      const branches = UPGRADE_BRANCHES[hoveredTower.type];
+
+      let upLine;
+      if (hoveredTower.needsBranch()) {
+        const bA = branches.A, bB = branches.B;
+        const cost = hoveredTower.branchCost();
+        upLine = `── Choose specialization ($${cost}) ──\n[U] ${bA.name}: ${bA.desc}\n[I] ${bB.name}: ${bB.desc}`;
+      } else {
+        const upCost = hoveredTower.upgradeCost();
+        const branchTag = hoveredTower.branch ? ` [${hoveredTower.branch}]` : '';
+        upLine = upCost !== null ? `[U] Upgrade: $${upCost}` : `Max level ★★★★★${branchTag}`;
+      }
+
+      const branchName = hoveredTower.branch ? ` · ${branches?.[hoveredTower.branch]?.name ?? ''}` : '';
+      const slowLine   = hoveredTower.type === 'slow'
+        ? `  ${Math.round((1-hoveredTower.slowFactor)*100)}% slow · ${hoveredTower.slowDuration}ms`
+        : '';
+      const ventLine   = hoveredTower.type === 'vent'
+        ? `  Drain ${hoveredTower.ventDrain ?? TOWERS.vent.ventDrain}/tile`
+        : '';
       this._setStatus(
-        `${cfg.label}  Lv${hoveredTower.level}\n` +
+        `${cfg.label}  Lv${hoveredTower.level}${branchName}\n` +
         `Dmg ${Math.round(hoveredTower.damage)}  Range ${Math.round(hoveredTower.range)}px\n` +
-        `Fire ${hoveredTower.fireRate}/s${slowLine}\n` +
+        `${hoveredTower.type !== 'vent' ? `Fire ${hoveredTower.fireRate}/s${slowLine}` : `Vent support${ventLine}`}\n` +
         `Sell: $${sell}\n${upLine}`
       );
     } else if (!this.placingTower && !this.demolishMode) {
@@ -1114,11 +1259,19 @@ export class GameScene extends Phaser.Scene {
       // Body — base color from creepType
       const pct = e.hp / e.maxHp;
       let bodyColor;
-      if (isBomber)         bodyColor = 0xcc1100;
+      if (e.breaching)      bodyColor = 0xffffff;   // white — unstoppable breach
+      else if (isBomber)    bodyColor = 0xcc1100;
       else if (isSlowed)    bodyColor = 0x8855cc;
       else if (isHeatBurst) bodyColor = 0xff5500;
       else                  bodyColor = pct > 0.5 ? typeCfg.color
                                       : pct > 0.25 ? 0xff7700 : 0xff0066;
+
+      // Breaching enemies pulse with a hard white ring — they're ignoring your maze
+      if (e.breaching) {
+        const pulse = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() * 0.008 + e.id));
+        g.lineStyle(3, 0xffffff, pulse);
+        g.strokeCircle(e.wx, e.wy, baseR + 5);
+      }
 
       // Evasive enemies flicker
       const alpha = (e.evasionBuildup > 0.05)

@@ -1,4 +1,4 @@
-import { MASTER } from '../config.js';
+import { MASTER, EXIT, TILE as CFG_TILE } from '../config.js';
 
 /**
  * Enemy entity – moves along a tile path, adds pressure, can be damaged.
@@ -27,6 +27,12 @@ export class Enemy {
 
     this.dead    = false;
     this.reached = false;
+
+    // Breach mode: when no grid path exists, walk directly to exit
+    // ignoring all walls and towers (real punishment for the player).
+    this.breaching = false;
+    this.exitPx = EXIT.col * CFG_TILE + CFG_TILE * 0.5;
+    this.exitPy = EXIT.row * CFG_TILE + CFG_TILE * 0.5;
 
     // Slow debuff state
     this.slowTimer  = 0;
@@ -60,7 +66,7 @@ export class Enemy {
    * Deal damage and evolve resistance organically.
    * Physical hits grow armor; sniper hits additionally grow evasion.
    */
-  takeDamage(amount, damageType = 'physical') {
+  takeDamage(amount, damageType = 'physical', armorPierce = 0) {
     if (damageType === 'physical') {
       this.armorBuildup = Math.min(MASTER.ARMOR_MAX,
         this.armorBuildup + MASTER.ARMOR_PER_HIT * this.adaptRate);
@@ -73,8 +79,10 @@ export class Enemy {
       }
     }
 
-    const reduced = (damageType === 'physical' && this.armorFactor > 0)
-      ? amount * (1 - this.armorFactor)
+    // armorPierce (0–1): Anti-Armor branch pierces a fraction of buildup
+    const effectiveArmor = this.armorFactor * (1 - armorPierce);
+    const reduced = (damageType === 'physical' && effectiveArmor > 0)
+      ? amount * (1 - effectiveArmor)
       : amount;
     this.hp -= reduced;
     if (this.hp <= 0) { this.hp = 0; this.dead = true; }
@@ -109,6 +117,20 @@ export class Enemy {
     }
     if (this.heatBurstTimer > 0) this.heatBurstTimer = Math.max(0, this.heatBurstTimer - dt);
 
+    const burstMult = (this.heatBurstTimer > 0) ? 1.30 : 1.0;
+    const step = this.speed * this.slowFactor * burstMult * dt * 0.001;
+
+    // ── Breach mode: path is gone, walk straight to exit ──────────────────
+    if (this.breaching) {
+      const dx = this.exitPx - this.wx, dy = this.exitPy - this.wy;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 4) { this.reached = true; return; }
+      this.wx += (dx / dist) * step;
+      this.wy += (dy / dist) * step;
+      return;
+    }
+
+    // ── Normal path-following ──────────────────────────────────────────────
     const nextNode = this.path[this.pathIndex + 1];
     if (!nextNode) { this.reached = true; return; }
 
@@ -116,8 +138,6 @@ export class Enemy {
     const ty = nextNode.y * this.tileSize + this.tileSize * 0.5;
     const dx = tx - this.wx, dy = ty - this.wy;
     const dist = Math.hypot(dx, dy);
-    const burstMult = (this.heatBurstTimer > 0) ? 1.30 : 1.0;
-    const step = this.speed * this.slowFactor * burstMult * dt * 0.001;
 
     if (dist <= step) {
       this.wx = tx; this.wy = ty;

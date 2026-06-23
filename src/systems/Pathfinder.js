@@ -7,7 +7,13 @@ export class Pathfinder {
     this.grid = grid;
   }
 
-  find(sx, sy, ex, ey) {
+  /**
+   * Find a path from (sx,sy) to (ex,ey).
+   * jitter adds per-tile cost noise (0–jitter fraction) so each call returns a
+   * slightly different route — enemies spread across the maze rather than
+   * marching single-file along one optimal line.
+   */
+  find(sx, sy, ex, ey, jitter = 0) {
     const g    = this.grid;
     const cols = g.cols;
 
@@ -63,7 +69,7 @@ export class Pathfinder {
         const nk = key(nx, ny);
         if (closed.has(nk)) continue;
 
-        const moveCost = g.cost(nx, ny);
+        const moveCost = g.cost(nx, ny) * (jitter > 0 ? (1 + Math.random() * jitter) : 1);
         if (moveCost === Infinity) continue;
 
         const tentG = (gScore.get(curK) ?? 0) + moveCost;

@@ -54,6 +54,8 @@ export interface Config {
   // --- Building / economy ---
   spawnBuffer: number; // no-build radius (tiles) around the spawn mouth
   killRewardMult: number; // global multiplier on kill rewards (lower = tighter economy)
+  salvageRefund: number; // fraction of base cost refunded when a tower is destroyed (collapse/bomb)
+  waveIncome: number; // base cash granted each wave clear (scales with wave) — rebuild fuel
   towerCostGrowth: number; // each extra tower of a kind costs +this fraction of base
 
   // --- Upgrades ---
@@ -120,6 +122,8 @@ export const config: Config = {
 
   spawnBuffer: 2,
   killRewardMult: 1,
+  salvageRefund: 0.5,
+  waveIncome: 40,
   towerCostGrowth: 0, // flat per-kind cost — HP-ramp/armor/evolution carry the anti-snowball job
 
   maxTowerLevel: 3,
@@ -255,7 +259,7 @@ export const TOWER_DEFS: Record<TowerKind, TowerDef> = {
     color: '#7ee0c0',
     hotkey: '4',
     ventRadius: 2, // Chebyshev half-extent → a 5×5 square of fully-vented tiles
-    ventRate: 10, // gentle per-tile drain: eases collapse over an area, never an off-switch
+    ventRate: 22, // strong enough to out-drain a sapper — the real counter to weaponized collapse
     blurb: 'Drains pressure in a 5×5 square — eases collapse.',
   },
   wall: {
@@ -322,6 +326,8 @@ export const sliders: [keyof Config, string, number, number, number][] = [
   ['enemyHp', 'Enemy HP (w1)', 10, 300, 5],
   ['spawnBuffer', 'No-build radius', 0, 5, 1],
   ['killRewardMult', 'Reward x', 0, 2, 0.05],
+  ['salvageRefund', 'Salvage', 0, 1, 0.05],
+  ['waveIncome', 'Wave income', 0, 150, 5],
   ['towerCostGrowth', 'Cost growth', 0, 0.5, 0.01],
   ['climbSpeedMult', 'Climb speed x', 0.1, 1, 0.05],
   ['frustrationToBomb', 'Bomb after', 1, 40, 1],

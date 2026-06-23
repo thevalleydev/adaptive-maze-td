@@ -14,37 +14,41 @@ export const EXIT  = { col: COLS - 1, row: Math.floor(ROWS / 2) }; // col 19, ro
 
 // ── Pressure system ─────────────────────────────────────────────────────────
 export const PRESSURE = {
-  PER_STEP:    2.0,   // pressure added each time an enemy steps onto a tile
-  CRACK_AT:    45,    // tile cracks  → higher path cost, visual damage
-  COLLAPSE_AT: 80,    // tile collapses → impassable, forces reroute
-  DISSIPATE:   0.40,  // fraction removed at end of each wave
+  PER_STEP:       3.2,   // pressure added each time an enemy steps onto a tile
+  CRACK_AT:        30,   // tile cracks  → preferred path, visual damage
+  COLLAPSE_AT:     80,   // tile collapses → passable breach, forces reroute
+  DISSIPATE:      0.40,  // fraction removed at end of each wave (higher = faster natural recovery)
+  BLEED_RATE:      2.5,  // pressure removed per in-wave bleed tick (unused tiles recover mid-wave)
+  BLEED_INTERVAL: 6000,  // ms between in-wave bleed ticks
+  PATH_JITTER:    0.20,  // per-tile cost noise — each enemy finds a slightly different route
 };
 
 // ── Economy ──────────────────────────────────────────────────────────────────
 export const ECONOMY = {
-  START_GOLD:       150,
-  KILL_REWARD:        8,   // was 10 — less gold per kill
+  START_GOLD:       200,
+  KILL_REWARD:       10,
   TOWER_COST:        30,
   LIVES:             20,
-  WAVE_BONUS_BASE:   15,   // gold bonus at end of each wave: BASE + wave * INCR
-  WAVE_BONUS_INCR:    5,   // was 8 — slower gold ramp between waves
+  WAVE_BONUS_BASE:   25,
+  WAVE_BONUS_INCR:    6,
+  REPAIR_COST:       25,  // cost to restore a cracked tile (mid-wave only)
 };
 
 // ── Waves ───────────────────────────────────────────────────────────────────
 export const WAVE = {
-  SPAWN_DELAY: 700,    // was 850 — faster spawning = more pressure
-  BASE_COUNT:    6,    // was 5 — more enemies from the start
-  COUNT_INCR:    4,    // was 3 — ramps faster each wave
+  SPAWN_DELAY: 900,    // ms between enemy spawns
+  BASE_COUNT:    5,
+  COUNT_INCR:    3,
 };
 
 // ── Enemy scaling ────────────────────────────────────────────────────────────
 // Enemy stats per wave:  stat = BASE + wave * INCR
 export const ENEMY = {
-  BASE_SPEED:     70,   // was 68
-  SPEED_INCR:      9,   // was 7  — enemies get faster faster
-  BASE_HP:        65,   // was 55
-  HP_INCR:        42,   // was 28 — HP ramps much harder
-  PRESSURE_SCALE: 0.10, // was 0.08
+  BASE_SPEED:     60,
+  SPEED_INCR:      7,
+  BASE_HP:        80,   // wave 1 = 160hp, wave 5 = 280hp
+  HP_INCR:        32,
+  PRESSURE_SCALE: 0.10,
 };
 
 // ── Tower types ──────────────────────────────────────────────────────────────
@@ -78,9 +82,41 @@ export const TOWERS = {
     slowFactor:   0.55,  // target moves at 55% speed
     slowDuration: 1500,  // ms
   },
+  vent: {
+    label:        '💨 Vent',
+    cost:         45,
+    range:        105,  // ~2.5 tile radius
+    damage:       0,
+    fireRate:     0,
+    color:        0x44ffcc,
+    damageType:   'none',
+    ventDrain:    3,    // pressure removed per tile per vent tick
+    ventInterval: 2500, // ms between vent ticks
+  },
 };
 
-// ── Creep types ───────────────────────────────────────────────────────────────
+// ── Upgrade branches (chosen at level 3) ──────────────────────────────────────
+// Each tower type has two specialization paths — A and B.
+// Choosing a branch costs 2× the tower's base cost.
+// After branching, levels 4-5 apply branch-specific boosts.
+export const UPGRADE_BRANCHES = {
+  basic: {
+    A: { name: '🔥 Cannon',   desc: '×2 dmg  ×0.5 rate — slow heavy hits', dmgMult: 2.0, rateMult: 0.5 },
+    B: { name: '⚡ Minigun',  desc: '×2.5 rate  ×0.5 dmg — spray & pray',  dmgMult: 0.5, rateMult: 2.5 },
+  },
+  sniper: {
+    A: { name: '🛡 Anti-Armor', desc: '×1.5 dmg · 80% armor pierce',         dmgMult: 1.5, armorPierce: 0.80 },
+    B: { name: '💀 Execute',    desc: '×3 dmg vs targets below 30% HP',      executeMult: 3.0, executeThreshold: 0.30 },
+  },
+  slow: {
+    A: { name: '🧊 Deep Freeze', desc: '30% speed · 4s · much stronger slow', slowFactor: 0.30, slowDuration: 4000 },
+    B: { name: '❄ Blizzard',    desc: '+30% range · slows ALL enemies in range', rangeMult: 1.3, aoeMode: true },
+  },
+  vent: {
+    A: { name: '🌬 Cyclone',    desc: '×2.5 drain · 2.5× faster ticking',   drainMult: 2.5, intervalMult: 0.4 },
+    B: { name: '⚡ Shockwave',  desc: 'Each vent tick deals 8 damage',        ventDamage: 8 },
+  },
+};
 // Each type defines stat multipliers and which traits it can organically develop.
 // Add new entries here to introduce new creep archetypes.
 export const CREEP_TYPES = {
